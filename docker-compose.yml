@@ -1,0 +1,87 @@
+# JustRebootIt: home-internet latency recorder.
+#
+# Brings up four services on one bridge network:
+#   prober        - measures latency / loss / traceroutes to diverse targets
+#   udm-exporter  - reads WAN throughput & gateway load from a UniFi Dream Machine Pro
+#   prometheus    - stores the time series
+#   grafana       - one shareable dashboard correlating it all
+#
+# Quick start:
+#   cp .env.example .env   # then edit UDM_* and (optionally) the gateway IP
+#   docker compose up -d --build
+#   open http://localhost:3000  (admin / the password in .env)
+
+services:
+  prober:
+    build: .
+    image: justrebootit:latest
+    container_name: jri-prober
+    command: ["-config", "/etc/justrebootit/targets.yml"]
+    # Raw ICMP sockets for ping and traceroute.
+    cap_add:
+      - NET_RAW
+    volumes:
+      # Override the baked-in targets with your own copy. Edit config/targets.yml
+      # (at least the home-gateway IP) before bringing the stack up.
+      - ./config/targets.yml:/etc/justrebootit/targets.yml:ro
+    restart: unless-stopped
+    networks: [monitoring]
+
+  udm-exporter:
+    build: .
+    image: justrebootit:latest
+    container_name: jri-udm-exporter
+    entrypoint: ["/usr/local/bin/udmexporter"]
+    env_file: .env
+    restart: unless-stopped
+    networks: [monitoring]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: jri-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Keep a long history so you can correlate spikes weeks later.
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    networks: [monitoring]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: jri-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_DEFAULT_THEME: light
+      # Zero-click: anonymous viewing is on and the login form is hidden, so
+      # opening http://localhost:3000 lands straight on the dashboard with no
+      # prompt. It also makes the dashboard shareable with an ISP engineer via a
+      # plain link. To edit panels, browse to /login and use admin + the
+      # password below. Set GRAFANA_ANON_ENABLED=false if you expose this beyond
+      # your LAN.
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANON_ENABLED:-true}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: ${GRAFANA_DISABLE_LOGIN:-true}
+      # Land on the latency dashboard instead of the empty Grafana home page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/latency.json
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks: [monitoring]
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

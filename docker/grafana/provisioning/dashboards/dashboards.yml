@@ -1,0 +1,14 @@
+# Load dashboard JSON from disk so the stack comes up with the latency
+# dashboard already in place.
+apiVersion: 1
+
+providers:
+  - name: justrebootit
+    orgId: 1
+    folder: JustRebootIt
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

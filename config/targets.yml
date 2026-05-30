@@ -1,0 +1,78 @@
+# JustRebootIt prober configuration.
+#
+# This file is baked into the image at /etc/justrebootit/targets.yml and can be
+# overridden by bind-mounting your own copy (see docker-compose.yml). Tune the
+# timing knobs to taste; the defaults send 20 pings spread across each 10s cycle
+# to every target, which is enough to catch brief spikes without much traffic.
+
+# Length of one probe cycle. All of a target's pings are spread across this
+# window before summary statistics are published.
+interval: 10s
+# Echo requests sent to each target per cycle. More pings => smoother "smoke".
+pings: 20
+# Per-reply timeout. Must be smaller than interval.
+timeout: 2s
+# Raw ICMP sockets (needs NET_RAW, granted in docker-compose.yml).
+privileged: true
+
+# Traceroutes are heavier and the path changes slowly, so run them less often.
+trace_interval: 60s
+trace_max_hops: 30
+trace_timeout: 2s
+
+# Prometheus metrics endpoint.
+listen_addr: ":9430"
+
+# Targets. Keep names stable over time so historical graphs line up. Use the
+# "group" field to organize the dashboard:
+#   gateway - your own router/first hop (rule out the LAN)
+#   isp     - your ISP's own infrastructure (what you'd show Comcast)
+#   anchor  - stable, well-run public anchors (rule out the far end)
+#   content - sites you actually care about reaching
+targets:
+  # --- Your first hop. EDIT this to your gateway's LAN IP. -----------------
+  # If latency spikes start here, the problem is inside your house.
+  - name: home-gateway
+    host: 192.168.1.1
+    group: gateway
+    trace: false
+
+  # --- Comcast / Xfinity infrastructure (edit for your ISP) ----------------
+  # 75.75.75.75 / 75.75.76.76 are Comcast's public DNS resolvers and make a
+  # good ISP-side anchor to share with a Comcast network engineer.
+  - name: comcast-dns-1
+    host: 75.75.75.75
+    group: isp
+    trace: true
+  - name: comcast-dns-2
+    host: 75.75.76.76
+    group: isp
+    trace: false
+
+  # --- Diverse public anchors (different networks/operators) ---------------
+  - name: cloudflare-dns
+    host: 1.1.1.1
+    group: anchor
+    trace: true
+  - name: google-dns
+    host: 8.8.8.8
+    group: anchor
+    trace: true
+  - name: quad9-dns
+    host: 9.9.9.9
+    group: anchor
+    trace: false
+  - name: level3-dns
+    host: 4.2.2.2
+    group: anchor
+    trace: true
+
+  # --- Content destinations you actually use -------------------------------
+  - name: google
+    host: www.google.com
+    group: content
+    trace: false
+  - name: cloudflare-cdn
+    host: www.cloudflare.com
+    group: content
+    trace: false
