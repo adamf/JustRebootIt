@@ -1,0 +1,12 @@
+# Local secrets / runtime config — never commit the gateway password.
+.env
+
+# Compiled binaries.
+/prober
+/udmexporter
+/bin/
+/out/
+
+# Editor / OS noise.
+*.swp
+.DS_Store

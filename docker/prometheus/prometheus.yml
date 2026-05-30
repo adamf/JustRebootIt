@@ -1,0 +1,25 @@
+# Prometheus scrape configuration for JustRebootIt.
+#
+# The prober is scraped frequently (every cycle) so latency samples are not
+# averaged away; the UDM exporter is scraped on a similar cadence so WAN
+# throughput lines up on the same time axis as latency.
+global:
+  scrape_interval: 10s
+  scrape_timeout: 8s
+  external_labels:
+    monitor: justrebootit
+
+scrape_configs:
+  - job_name: prober
+    static_configs:
+      - targets: ["prober:9430"]
+
+  - job_name: udm
+    # The exporter scrapes the gateway live on each pull; give it room.
+    scrape_timeout: 15s
+    static_configs:
+      - targets: ["udm-exporter:9431"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
