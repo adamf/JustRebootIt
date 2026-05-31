@@ -54,10 +54,13 @@ targets:
     host: 1.1.1.1
     group: anchor
     trace: true
+  # google-dns / level3-dns are kept as always-on latency references but are NOT
+  # traced here: path discovery (below) picks a path-diverse subset to trace, so
+  # we don't waste traceroutes on routes that overlap cloudflare-dns's path.
   - name: google-dns
     host: 8.8.8.8
     group: anchor
-    trace: true
+    trace: false
   - name: quad9-dns
     host: 9.9.9.9
     group: anchor
@@ -65,7 +68,7 @@ targets:
   - name: level3-dns
     host: 4.2.2.2
     group: anchor
-    trace: true
+    trace: false
 
   # --- Content destinations you actually use -------------------------------
   - name: google
@@ -76,3 +79,48 @@ targets:
     host: www.cloudflare.com
     group: content
     trace: false
+
+# --- Path discovery ----------------------------------------------------------
+# Probing many destinations that share the same first few hops is redundant: a
+# hiccup on the shared segment spikes everything and localizes nothing.
+# Discovery traces this candidate pool periodically and promotes a path-diverse
+# subset (distinct 2nd/3rd hops, reachable in the fewest hops) to active probing
+# under group "discovered". The always-on targets above are never affected.
+discovery:
+  enabled: true
+  interval: 15m         # re-trace and re-select this often
+  max_targets: 6        # how many diverse paths to keep actively probed
+  max_hops: 8           # short traces during discovery (we only need early hops)
+  max_reach_hops: 12    # drop candidates farther than this; distance dilutes localization
+  candidates:
+    # A broad pool spanning distinct operators/ASNs so their early hops differ.
+    # Names must be unique and must not duplicate the always-on targets above.
+    - { name: cloudflare-alt,  host: 1.0.0.1 }
+    - { name: google-alt,      host: 8.8.4.4 }
+    - { name: quad9-alt,       host: 149.112.112.112 }
+    - { name: level3-alt,      host: 4.2.2.1 }
+    - { name: opendns-a,       host: 208.67.222.222 }
+    - { name: opendns-b,       host: 208.67.220.220 }
+    - { name: verisign-dns,    host: 64.6.64.6 }
+    - { name: hurricane-dns,   host: 74.82.42.42 }
+    - { name: adguard-dns,     host: 94.140.14.14 }
+    - { name: cleanbrowsing,   host: 185.228.168.9 }
+    - { name: neustar-dns,     host: 156.154.70.1 }
+    - { name: comodo-dns,      host: 8.26.56.26 }
+
+# --- Latency-triggered diagnostics -------------------------------------------
+# When a target's latency or loss looks anomalous, run deeper tests immediately
+# to capture signal while the problem is still happening:
+#   - a fresh traceroute (path snapshot during the event)
+#   - a TCP handshake time (ICMP is often deprioritized; this proves real impact)
+#   - a DNS resolution time (a common hidden culprit)
+diagnostics:
+  enabled: true
+  latency_factor: 3.0       # trigger when median > 3x the rolling baseline
+  latency_abs_margin: 30ms  # ...and at least 30ms above it (ignores tiny jitter)
+  loss_threshold: 0.1       # or when loss >= 10%
+  cooldown: 60s             # at most one diagnostic run per target per minute
+  baseline_alpha: 0.2       # EWMA smoothing for the "normal latency" baseline
+  tcp_port: 443             # handshake port for the TCP latency test
+  dns_probe: www.google.com # name resolved & timed during a diagnostic run
+  workers: 2                # concurrent diagnostic runs

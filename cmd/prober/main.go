@@ -3,19 +3,29 @@
 // probed concurrently; within a target, pings are smeared across the cycle the
 // way smokeping does so brief spikes are not missed. Trace-enabled targets also
 // get periodic ICMP traceroutes for per-hop attribution.
+//
+// On top of the always-on targets, two systems keep the data interesting:
+//   - path discovery promotes a path-diverse subset of a candidate pool, so we
+//     probe short, distinct routes rather than many redundant ones; and
+//   - diagnostics fire deeper tests (fresh traceroute, TCP handshake, DNS
+//     timing) the instant a target's latency or loss looks anomalous.
 package main
 
 import (
 	"context"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/adamf/justrebootit/internal/config"
+	"github.com/adamf/justrebootit/internal/diag"
+	"github.com/adamf/justrebootit/internal/discovery"
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
@@ -31,8 +41,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	log.Printf("loaded %d targets from %s (interval=%s, pings=%d)",
-		len(cfg.Targets), *configPath, cfg.Interval, cfg.Pings)
+	log.Printf("loaded %d always-on targets from %s (interval=%s, pings=%d; discovery=%t, diagnostics=%t)",
+		len(cfg.Targets), *configPath, cfg.Interval, cfg.Pings, cfg.Discovery.Enabled, cfg.Diagnostics.Enabled)
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
@@ -40,21 +50,33 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var wg sync.WaitGroup
-	for _, t := range cfg.Targets {
-		wg.Add(1)
-		go func(t config.Target) {
-			defer wg.Done()
-			runPingLoop(ctx, cfg, t, m)
-		}(t)
+	a := newApp(ctx, cfg, m)
 
-		if t.Trace {
-			wg.Add(1)
-			go func(t config.Target) {
-				defer wg.Done()
-				runTraceLoop(ctx, cfg, t, m)
-			}(t)
-		}
+	// Diagnostics: detector + worker pool that runs deeper tests on triggers.
+	if cfg.Diagnostics.Enabled {
+		a.detector = diag.NewDetector(diag.DetectorConfig{
+			Factor:        cfg.Diagnostics.LatencyFactor,
+			AbsMargin:     cfg.Diagnostics.LatencyAbsMargin,
+			LossThreshold: cfg.Diagnostics.LossThreshold,
+			Cooldown:      cfg.Diagnostics.Cooldown,
+			Alpha:         cfg.Diagnostics.BaselineAlpha,
+		})
+		a.startDiagWorkers()
+	}
+
+	// Always-on targets run for the whole lifetime.
+	for _, t := range cfg.Targets {
+		a.startTarget(t)
+	}
+
+	// Path discovery promotes a diverse subset of the candidate pool. With no
+	// candidates it has nothing to do, so it stays dormant.
+	if cfg.Discovery.Enabled && len(cfg.Discovery.Candidates) > 0 {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.runDiscovery(ctx)
+		}()
 	}
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: metricsHandler(reg)}
@@ -70,7 +92,39 @@ func main() {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutCtx)
-	wg.Wait()
+	a.wg.Wait()
+}
+
+// app holds the prober's shared state and coordinates the target loops,
+// discovery, and diagnostics.
+type app struct {
+	ctx context.Context
+	cfg config.Config
+	m   *metrics.Metrics
+
+	detector *diag.Detector
+	diagJobs chan diag.Trigger
+
+	wg sync.WaitGroup
+
+	mu sync.Mutex
+	// registry maps a probed target's name to its full definition, so a
+	// diagnostic worker can look up the host/group for a triggered target.
+	registry map[string]config.Target
+	// discovered tracks the cancel func for each discovery-promoted target so
+	// they can be stopped when no longer selected.
+	discovered map[string]context.CancelFunc
+}
+
+func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
+	return &app{
+		ctx:        ctx,
+		cfg:        cfg,
+		m:          m,
+		diagJobs:   make(chan diag.Trigger, 64),
+		registry:   make(map[string]config.Target),
+		discovered: make(map[string]context.CancelFunc),
+	}
 }
 
 func metricsHandler(reg *prometheus.Registry) http.Handler {
@@ -86,25 +140,80 @@ func metricsHandler(reg *prometheus.Registry) http.Handler {
 	return mux
 }
 
-// runPingLoop probes one target once per cycle until the context is cancelled.
-// The very first cycle is jittered so that many targets do not all fire in
-// lockstep at startup.
-func runPingLoop(ctx context.Context, cfg config.Config, t config.Target, m *metrics.Metrics) {
-	p := pinger.New(t.Host, cfg.Pings, cfg.Timeout, cfg.Privileged)
+// startTarget launches the ping loop (and, if the target is trace-enabled, the
+// trace loop) for a target that lives for the whole process lifetime.
+func (a *app) startTarget(t config.Target) {
+	a.register(t)
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.pingLoop(a.ctx, t)
+	}()
+	if t.Trace {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.traceLoop(a.ctx, t)
+		}()
+	}
+}
 
-	ticker := time.NewTicker(cfg.Interval)
+func (a *app) register(t config.Target) {
+	a.mu.Lock()
+	a.registry[t.Name] = t
+	a.mu.Unlock()
+}
+
+func (a *app) lookup(name string) (config.Target, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	t, ok := a.registry[name]
+	return t, ok
+}
+
+// pingLoop probes one target once per cycle until ctx is cancelled, publishing
+// the per-cycle statistics and feeding the anomaly detector.
+func (a *app) pingLoop(ctx context.Context, t config.Target) {
+	p := pinger.New(t.Host, a.cfg.Pings, a.cfg.Timeout, a.cfg.Privileged)
+
+	ticker := time.NewTicker(a.cfg.Interval)
 	defer ticker.Stop()
 	for {
-		res := p.Run(ctx, cfg.Interval)
+		res := p.Run(ctx, a.cfg.Interval)
 		if res.Err != nil {
 			// A hard error (e.g. unresolvable host) — record down with full
 			// loss and keep trying; transient DNS or routing failures often
 			// recover. Reporting loss=1 (rather than 0) keeps the loss panel
 			// honest while probe_up=0 flags the underlying failure.
 			log.Printf("ping %s (%s): %v", t.Name, t.Host, res.Err)
-			m.ObserveProbe(t.Name, t.Group, pinger.Result{Sent: cfg.Pings, Loss: 1})
+			res = pinger.Result{Sent: a.cfg.Pings, Loss: 1}
+		}
+		a.m.ObserveProbe(t.Name, t.Group, res)
+		a.maybeDiagnose(t, res)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// traceLoop traces one target on the trace interval until cancelled.
+func (a *app) traceLoop(ctx context.Context, t config.Target) {
+	tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+
+	ticker := time.NewTicker(a.cfg.TraceInterval)
+	defer ticker.Stop()
+	for {
+		res, err := tr.Trace(ctx, t.Host)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("trace %s (%s): %v", t.Name, t.Host, err)
 		} else {
-			m.ObserveProbe(t.Name, t.Group, res)
+			a.m.ObserveTrace(t.Name, t.Group, res)
 		}
 
 		select {
@@ -115,27 +224,165 @@ func runPingLoop(ctx context.Context, cfg config.Config, t config.Target, m *met
 	}
 }
 
-// runTraceLoop traces one target on the trace interval until cancelled.
-func runTraceLoop(ctx context.Context, cfg config.Config, t config.Target, m *metrics.Metrics) {
-	tr := tracer.New(cfg.TraceMaxHops, cfg.TraceTimeout, cfg.Privileged)
+// maybeDiagnose feeds a cycle's result to the detector and, on an anomaly,
+// enqueues a diagnostic run (dropping it if the queue is full rather than
+// blocking the probe loop).
+func (a *app) maybeDiagnose(t config.Target, res pinger.Result) {
+	if a.detector == nil {
+		return
+	}
+	trig, fired := a.detector.Observe(t.Name, res.Median, res.Loss, res.Recv > 0, time.Now())
+	if !fired {
+		return
+	}
+	a.m.DiagTriggered(t.Name, trig.Reason)
+	log.Printf("diagnostic trigger %s: reason=%s median=%s baseline=%s loss=%.0f%%",
+		t.Name, trig.Reason, trig.Median, trig.Baseline, trig.Loss*100)
+	select {
+	case a.diagJobs <- trig:
+	default:
+		log.Printf("diagnostic queue full, dropping run for %s", t.Name)
+	}
+}
 
-	ticker := time.NewTicker(cfg.TraceInterval)
+// startDiagWorkers launches the diagnostic worker pool.
+func (a *app) startDiagWorkers() {
+	for i := 0; i < a.cfg.Diagnostics.Workers; i++ {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			for {
+				select {
+				case <-a.ctx.Done():
+					return
+				case trig := <-a.diagJobs:
+					a.runDiagnostics(trig)
+				}
+			}
+		}()
+	}
+}
+
+// runDiagnostics performs the deeper tests for a triggered target: a fresh
+// traceroute (path snapshot during the event), a TCP handshake (real-traffic
+// latency independent of ICMP treatment), and a DNS resolution timing.
+func (a *app) runDiagnostics(trig diag.Trigger) {
+	t, ok := a.lookup(trig.Target)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+
+	// Fresh traceroute to capture the path while the problem is happening.
+	tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+	if res, err := tr.Trace(ctx, t.Host); err == nil {
+		a.m.ObserveTrace(t.Name, t.Group, res)
+	}
+
+	// TCP handshake latency to the same host.
+	if a.cfg.Diagnostics.TCPPort > 0 {
+		addr := net.JoinHostPort(t.Host, strconv.Itoa(a.cfg.Diagnostics.TCPPort))
+		d, err := diag.TCPConnect(ctx, addr, 5*time.Second)
+		a.m.ObserveTCPConnect(t.Name, d, err == nil)
+		if err != nil {
+			log.Printf("diagnostic tcp %s (%s): %v", t.Name, addr, err)
+		}
+	}
+
+	// DNS resolution timing.
+	if a.cfg.Diagnostics.DNSProbe != "" {
+		d, err := diag.DNSLookup(ctx, a.cfg.Diagnostics.DNSProbe, 5*time.Second)
+		a.m.ObserveDNSLookup(t.Name, d, err == nil)
+		if err != nil {
+			log.Printf("diagnostic dns %s (%s): %v", t.Name, a.cfg.Diagnostics.DNSProbe, err)
+		}
+	}
+}
+
+// runDiscovery periodically traces the candidate pool, selects a path-diverse
+// subset, and reconciles the set of discovery-promoted probe targets. The first
+// pass runs immediately so discovered targets come online at startup.
+func (a *app) runDiscovery(ctx context.Context) {
+	d := discovery.NewDiscoverer(a.cfg.Discovery.MaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+
+	pass := func() {
+		paths := d.Probe(ctx, a.cfg.Discovery.Candidates)
+		selected := discovery.Select(paths, a.cfg.Discovery.MaxTargets, a.cfg.Discovery.MaxReachHops)
+
+		selectedSet := make(map[string]bool, len(selected))
+		for _, p := range selected {
+			selectedSet[p.Name] = true
+		}
+		a.m.ObserveDiscovery(paths, selectedSet)
+		a.reconcileDiscovered(selected)
+
+		names := make([]string, 0, len(selected))
+		for _, p := range selected {
+			names = append(names, p.Name)
+		}
+		log.Printf("discovery: traced %d candidates, active set: %v", len(paths), names)
+	}
+
+	pass()
+	ticker := time.NewTicker(a.cfg.Discovery.Interval)
 	defer ticker.Stop()
 	for {
-		res, err := tr.Trace(ctx, t.Host)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Printf("trace %s (%s): %v", t.Name, t.Host, err)
-		} else {
-			m.ObserveTrace(t.Name, t.Group, res)
-		}
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			pass()
 		}
+	}
+}
+
+// reconcileDiscovered starts probing newly selected candidates and stops the
+// ones no longer selected, leaving always-on targets untouched.
+func (a *app) reconcileDiscovered(selected []discovery.PathInfo) {
+	want := make(map[string]config.Target, len(selected))
+	candByName := make(map[string]config.Target, len(a.cfg.Discovery.Candidates))
+	for _, c := range a.cfg.Discovery.Candidates {
+		candByName[c.Name] = c
+	}
+	for _, p := range selected {
+		c := candByName[p.Name]
+		c.Group = "discovered"
+		c.Trace = true // the whole point of a discovered path is to trace it
+		want[p.Name] = c
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Stop targets that are no longer selected.
+	for name, cancel := range a.discovered {
+		if _, keep := want[name]; !keep {
+			cancel()
+			delete(a.discovered, name)
+			delete(a.registry, name)
+			a.m.ClearTarget(name)
+		}
+	}
+	// Start newly selected targets.
+	for name, t := range want {
+		if _, running := a.discovered[name]; running {
+			continue
+		}
+		tctx, cancel := context.WithCancel(a.ctx)
+		a.discovered[name] = cancel
+		a.registry[name] = t
+
+		a.wg.Add(1)
+		go func(t config.Target) {
+			defer a.wg.Done()
+			a.pingLoop(tctx, t)
+		}(t)
+		a.wg.Add(1)
+		go func(t config.Target) {
+			defer a.wg.Done()
+			a.traceLoop(tctx, t)
+		}(t)
 	}
 }

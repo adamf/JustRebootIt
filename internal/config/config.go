@@ -57,8 +57,76 @@ type Config struct {
 	// ListenAddr is the address the Prometheus metrics endpoint listens on.
 	ListenAddr string `yaml:"listen_addr"`
 
-	// Targets is the list of hosts to probe.
+	// Targets is the list of always-on hosts to probe. These are never dropped
+	// by path discovery (your gateway and ISP belong here).
 	Targets []Target `yaml:"targets"`
+
+	// Discovery configures automatic selection of additional, path-diverse
+	// probe targets from a candidate pool. See Discovery.
+	Discovery Discovery `yaml:"discovery"`
+
+	// Diagnostics configures the extra tests that fire when a latency spike or
+	// loss event is detected. See Diagnostics.
+	Diagnostics Diagnostics `yaml:"diagnostics"`
+}
+
+// Discovery automatically promotes a path-diverse subset of a candidate pool to
+// active probing. Probing many targets that share the same first few hops is
+// redundant — a spike on the shared segment shows up everywhere and localizes
+// nothing. Discovery traces the candidates, then keeps the ones whose 2nd/3rd
+// hops differ and that reach their destination in the fewest hops, so each
+// active path is short and distinct (and a spike pins to a specific segment).
+type Discovery struct {
+	// Enabled turns discovery on. When off, only Targets are probed.
+	Enabled bool `yaml:"enabled"`
+	// Interval is how often the candidate pool is re-traced and re-selected.
+	// Paths change slowly, so this is typically minutes.
+	Interval time.Duration `yaml:"interval"`
+	// MaxTargets caps how many discovered targets are promoted to active
+	// probing (on top of the always-on Targets).
+	MaxTargets int `yaml:"max_targets"`
+	// MaxHops bounds the (short) traceroutes used during discovery. Discovery
+	// only needs the first few hops plus reachability, so this is much smaller
+	// than TraceMaxHops.
+	MaxHops int `yaml:"max_hops"`
+	// MaxReachHops drops candidates that take more than this many hops to
+	// reach; far-away targets dilute localization. Zero disables the limit.
+	MaxReachHops int `yaml:"max_reach_hops"`
+	// Candidates is the pool discovery selects from.
+	Candidates []Target `yaml:"candidates"`
+}
+
+// Diagnostics controls the deeper, on-demand tests that run the moment a target
+// looks unhealthy, capturing extra signal while the problem is still happening
+// (spikes are often gone by the time a human looks).
+type Diagnostics struct {
+	// Enabled turns latency/loss-triggered diagnostics on.
+	Enabled bool `yaml:"enabled"`
+	// LatencyFactor triggers diagnostics when a cycle's median RTT exceeds the
+	// target's rolling baseline by this multiple (e.g. 3.0 == 3x normal).
+	LatencyFactor float64 `yaml:"latency_factor"`
+	// LatencyAbsMargin is an additional floor: the median must also exceed the
+	// baseline by at least this much, so tiny absolute jumps on a low-latency
+	// target don't trip the trigger.
+	LatencyAbsMargin time.Duration `yaml:"latency_abs_margin"`
+	// LossThreshold triggers diagnostics when the loss ratio meets or exceeds
+	// this value, in [0,1].
+	LossThreshold float64 `yaml:"loss_threshold"`
+	// Cooldown is the minimum time between diagnostic runs for a single target,
+	// so a sustained event doesn't launch a storm of tests.
+	Cooldown time.Duration `yaml:"cooldown"`
+	// BaselineAlpha is the EWMA smoothing factor (0,1] for the rolling latency
+	// baseline; smaller reacts more slowly and is more robust to noise.
+	BaselineAlpha float64 `yaml:"baseline_alpha"`
+	// TCPPort is the port used for the TCP-handshake latency test. Many ISPs
+	// deprioritize ICMP, so a TCP connect corroborates whether real traffic is
+	// affected. 443 is a safe default.
+	TCPPort int `yaml:"tcp_port"`
+	// DNSProbe is a hostname resolved (and timed) during a diagnostic run to
+	// catch DNS resolution latency, a common real-world culprit.
+	DNSProbe string `yaml:"dns_probe"`
+	// Workers bounds how many diagnostic runs happen concurrently.
+	Workers int `yaml:"workers"`
 }
 
 // Default returns a configuration with sane defaults already applied. Loading a
@@ -73,6 +141,24 @@ func Default() Config {
 		TraceMaxHops:  30,
 		TraceTimeout:  2 * time.Second,
 		ListenAddr:    ":9430",
+		Discovery: Discovery{
+			Enabled:      true,
+			Interval:     15 * time.Minute,
+			MaxTargets:   6,
+			MaxHops:      8,
+			MaxReachHops: 12,
+		},
+		Diagnostics: Diagnostics{
+			Enabled:          true,
+			LatencyFactor:    3.0,
+			LatencyAbsMargin: 30 * time.Millisecond,
+			LossThreshold:    0.1,
+			Cooldown:         60 * time.Second,
+			BaselineAlpha:    0.2,
+			TCPPort:          443,
+			DNSProbe:         "www.google.com",
+			Workers:          2,
+		},
 	}
 }
 
@@ -108,18 +194,56 @@ func (c Config) Validate() error {
 	if c.Timeout >= c.Interval {
 		return fmt.Errorf("timeout (%s) must be smaller than interval (%s)", c.Timeout, c.Interval)
 	}
-	seen := make(map[string]struct{}, len(c.Targets))
-	for i, t := range c.Targets {
+	// Names form metric labels and must be unique across both the always-on
+	// targets and the discovery candidate pool, since a promoted candidate is
+	// probed under the same name.
+	seen := make(map[string]struct{}, len(c.Targets)+len(c.Discovery.Candidates))
+	checkTarget := func(kind string, i int, t Target) error {
 		if t.Name == "" {
-			return fmt.Errorf("target %d has no name", i)
+			return fmt.Errorf("%s %d has no name", kind, i)
 		}
 		if t.Host == "" {
-			return fmt.Errorf("target %q has no host", t.Name)
+			return fmt.Errorf("%s %q has no host", kind, t.Name)
 		}
 		if _, dup := seen[t.Name]; dup {
 			return fmt.Errorf("duplicate target name %q", t.Name)
 		}
 		seen[t.Name] = struct{}{}
+		return nil
+	}
+	for i, t := range c.Targets {
+		if err := checkTarget("target", i, t); err != nil {
+			return err
+		}
+	}
+	for i, t := range c.Discovery.Candidates {
+		if err := checkTarget("candidate", i, t); err != nil {
+			return err
+		}
+	}
+
+	// Discovery with no candidates is simply inactive (not an error), so a
+	// minimal config that only lists always-on targets still loads. The
+	// interval/max bounds are only meaningful once there are candidates to act
+	// on.
+	if c.Discovery.Enabled && len(c.Discovery.Candidates) > 0 {
+		if c.Discovery.Interval <= 0 {
+			return fmt.Errorf("discovery.interval must be > 0 when discovery is enabled")
+		}
+		if c.Discovery.MaxTargets < 1 {
+			return fmt.Errorf("discovery.max_targets must be >= 1 when discovery is enabled")
+		}
+	}
+	if c.Diagnostics.Enabled {
+		if c.Diagnostics.BaselineAlpha <= 0 || c.Diagnostics.BaselineAlpha > 1 {
+			return fmt.Errorf("diagnostics.baseline_alpha must be in (0,1], got %v", c.Diagnostics.BaselineAlpha)
+		}
+		if c.Diagnostics.LatencyFactor < 1 {
+			return fmt.Errorf("diagnostics.latency_factor must be >= 1, got %v", c.Diagnostics.LatencyFactor)
+		}
+		if c.Diagnostics.Workers < 1 {
+			return fmt.Errorf("diagnostics.workers must be >= 1, got %d", c.Diagnostics.Workers)
+		}
 	}
 	return nil
 }
