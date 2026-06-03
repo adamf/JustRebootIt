@@ -159,6 +159,67 @@ trace_max_hops: 30
 trace_timeout: 2s
 ```
 
+### Path discovery — diverse, short routes (automatic)
+
+Probing a dozen destinations that all leave your house the same way is mostly
+redundant: when that shared segment hiccups, *everything* spikes at once and you
+learn nothing about *where*. The `discovery:` block fixes this. Periodically it
+traces a candidate pool, then promotes a **path-diverse** subset to active
+probing — keeping the ones whose **2nd/3rd hops differ** and that **reach their
+destination in the fewest hops** (closer targets localize a fault more
+precisely). Selected candidates are probed and traced under the group
+`discovered`; the always-on `targets` above are never touched.
+
+```yaml
+discovery:
+  enabled: true
+  interval: 15m         # re-trace the pool and re-select this often
+  max_targets: 6        # how many diverse paths to actively probe
+  max_hops: 8           # short traces during discovery (only early hops matter)
+  max_reach_hops: 12    # ignore candidates farther than this
+  candidates:
+    - { name: cloudflare-alt, host: 1.0.0.1 }
+    - { name: opendns-a,      host: 208.67.222.222 }
+    # ... a broad pool spanning distinct operators/ASNs
+```
+
+Candidate names must be unique and must not collide with the always-on targets.
+The dashboard's **Active discovered paths** panel shows which are currently
+selected, and **Candidate distance** shows how many hops away each one is.
+
+### Triggered diagnostics — deeper tests during a spike
+
+Intermittent problems are usually gone before you can react. The
+`diagnostics:` block watches every probe cycle and, the moment a target looks
+anomalous, fires a burst of deeper tests automatically — capturing evidence
+while the problem is still happening:
+
+- a **fresh traceroute** (a path snapshot taken *during* the event);
+- a **TCP handshake time** to the target — because many ISPs deprioritize ICMP,
+  this proves whether *real* traffic is affected, not just pings; and
+- a **DNS resolution time** — slow lookups masquerade as "the internet is slow".
+
+A run fires when a cycle's median RTT exceeds the target's rolling baseline by
+both a factor and an absolute margin (so neither tiny jitter nor a small
+relative bump alone trips it), or when loss crosses a threshold — debounced by a
+cooldown so a sustained event triggers once, not every cycle.
+
+```yaml
+diagnostics:
+  enabled: true
+  latency_factor: 3.0       # trigger when median > 3x the rolling baseline
+  latency_abs_margin: 30ms  # ...and at least 30ms above it
+  loss_threshold: 0.1       # or when loss >= 10%
+  cooldown: 60s             # at most one run per target per minute
+  baseline_alpha: 0.2       # EWMA smoothing for the "normal latency" baseline
+  tcp_port: 443             # handshake port for the TCP latency test
+  dns_probe: www.google.com # name resolved & timed during a run
+  workers: 2                # concurrent diagnostic runs
+```
+
+Every trigger also drops a **red annotation** across the whole dashboard, so you
+can line up exactly when deeper tests fired against the latency and WAN graphs.
+
 ### Secrets / Grafana — `.env`
 
 See `.env.example`. The `.env` file holds your UDM password and is gitignored.
@@ -189,6 +250,11 @@ shared as-is:
    latency/speedtest, client counts, all on the same time axis. If latency
    spikes line up with the WAN maxing out, that's **congestion/bufferbloat**, not
    an ISP fault — fix it with QoS/Smart Queues rather than a support ticket.
+6. **Path discovery & triggered diagnostics** — which diverse paths are currently
+   active, how far away each candidate is, when deeper diagnostics fired, and the
+   TCP-handshake / DNS-lookup times they captured. **Red annotations** across the
+   whole dashboard mark each diagnostic trigger, so you can align "deeper tests
+   fired here" with the latency and WAN graphs above.
 
 **Sharing with your ISP:** select the time window around an incident, take a
 screenshot of the median-latency and traceroute panels (and the WAN-throughput
@@ -209,6 +275,11 @@ Prober (`:9430/metrics`):
 | `traceroute_hop_rtt_seconds{target,group,ttl}` | RTT to the router at each hop |
 | `traceroute_hop_info{target,ttl,addr}` | the router address seen at each hop |
 | `traceroute_path_length` / `traceroute_reached` | path length / reached dest |
+| `discovery_selected{target}` | 1 if the candidate is currently promoted to active probing |
+| `discovery_reach_hops{target}` / `discovery_reached{target}` | candidate distance / reachability |
+| `diagnostic_triggered_total{target,reason}` | count of latency/loss-triggered diagnostic runs |
+| `diagnostic_tcp_connect_seconds{target}` / `_up` | TCP handshake time / success from the last run |
+| `diagnostic_dns_lookup_seconds{target}` / `_up` | DNS resolution time / success from the last run |
 
 UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,
@@ -238,6 +309,10 @@ it will log auth failures and report `udm_up 0` without affecting anything else.
   answers `ping`.
 - **Dashboard empty for a minute after startup** → normal; Prometheus needs a
   scrape cycle or two before the first points appear.
+- **"Active discovered paths" is empty** → discovery uses the same raw-ICMP
+  traceroutes as everything else, so it needs `NET_RAW` (see above). It also only
+  runs its first pass at startup and then every `discovery.interval`; give it a
+  moment. With no `candidates` configured it stays dormant by design.
 
 ## Development
 

@@ -6,7 +6,9 @@ package metrics
 
 import (
 	"strconv"
+	"time"
 
+	"github.com/adamf/justrebootit/internal/discovery"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +32,16 @@ type Metrics struct {
 	hopInfo *prometheus.GaugeVec
 	pathLen *prometheus.GaugeVec
 	reached *prometheus.GaugeVec
+
+	discSelected  *prometheus.GaugeVec
+	discReachHops *prometheus.GaugeVec
+	discReached   *prometheus.GaugeVec
+
+	diagTriggered  *prometheus.CounterVec
+	diagTCPConnect *prometheus.GaugeVec
+	diagTCPUp      *prometheus.GaugeVec
+	diagDNSLookup  *prometheus.GaugeVec
+	diagDNSUp      *prometheus.GaugeVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -93,12 +105,48 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "traceroute_reached",
 			Help: "1 if the most recent traceroute reached the destination, else 0.",
 		}, probeLabels),
+
+		discSelected: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "discovery_selected",
+			Help: "1 if the candidate is currently promoted to active probing by path discovery, else 0.",
+		}, []string{"target"}),
+		discReachHops: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "discovery_reach_hops",
+			Help: "Hop count to the candidate's destination measured during the last discovery pass.",
+		}, []string{"target"}),
+		discReached: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "discovery_reached",
+			Help: "1 if the candidate was reachable during the last discovery pass, else 0.",
+		}, []string{"target"}),
+
+		diagTriggered: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_triggered_total",
+			Help: "Count of latency/loss-triggered diagnostic runs, by target and reason.",
+		}, []string{"target", "reason"}),
+		diagTCPConnect: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "diagnostic_tcp_connect_seconds",
+			Help: "TCP handshake time to the target measured during the last diagnostic run.",
+		}, []string{"target"}),
+		diagTCPUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "diagnostic_tcp_connect_up",
+			Help: "1 if the last diagnostic TCP handshake to the target succeeded, else 0.",
+		}, []string{"target"}),
+		diagDNSLookup: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "diagnostic_dns_lookup_seconds",
+			Help: "DNS resolution time for the configured probe name during the last diagnostic run.",
+		}, []string{"target"}),
+		diagDNSUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "diagnostic_dns_lookup_up",
+			Help: "1 if the last diagnostic DNS lookup succeeded, else 0.",
+		}, []string{"target"}),
 	}
 
 	reg.MustRegister(
 		m.up, m.sent, m.recv, m.loss,
 		m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
 		m.hopRTT, m.hopInfo, m.pathLen, m.reached,
+		m.discSelected, m.discReachHops, m.discReached,
+		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 	)
 	return m
 }
@@ -149,4 +197,66 @@ func (m *Metrics) ObserveTrace(target, group string, r tracer.Result) {
 		reached = 1
 	}
 	m.reached.WithLabelValues(target, group).Set(reached)
+}
+
+// ClearTarget removes all probe, traceroute, and diagnostic series for a
+// target. It is called when a discovery-promoted target is demoted, so its
+// stale data does not linger on the dashboard. Discovery series are left alone:
+// the candidate still exists and its selected=0 state is refreshed each pass.
+func (m *Metrics) ClearTarget(target string) {
+	l := prometheus.Labels{"target": target}
+	for _, v := range []*prometheus.GaugeVec{
+		m.up, m.loss, m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
+		m.hopRTT, m.hopInfo, m.pathLen, m.reached,
+		m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
+	} {
+		v.DeletePartialMatch(l)
+	}
+	m.sent.DeletePartialMatch(l)
+	m.recv.DeletePartialMatch(l)
+	m.diagTriggered.DeletePartialMatch(l)
+}
+
+// ObserveDiscovery publishes the result of one discovery pass: every candidate's
+// reachability/hop count, and whether it was selected for active probing.
+func (m *Metrics) ObserveDiscovery(paths []discovery.PathInfo, selected map[string]bool) {
+	for _, p := range paths {
+		sel := 0.0
+		if selected[p.Name] {
+			sel = 1
+		}
+		m.discSelected.WithLabelValues(p.Name).Set(sel)
+		m.discReachHops.WithLabelValues(p.Name).Set(float64(p.ReachHops))
+		reached := 0.0
+		if p.Reached {
+			reached = 1
+		}
+		m.discReached.WithLabelValues(p.Name).Set(reached)
+	}
+}
+
+// DiagTriggered records that a diagnostic run started for target due to reason.
+func (m *Metrics) DiagTriggered(target, reason string) {
+	m.diagTriggered.WithLabelValues(target, reason).Inc()
+}
+
+// ObserveTCPConnect publishes the TCP-handshake result from a diagnostic run.
+// On failure only the up=0 flag is set, leaving the latency gauge untouched.
+func (m *Metrics) ObserveTCPConnect(target string, d time.Duration, ok bool) {
+	if ok {
+		m.diagTCPConnect.WithLabelValues(target).Set(d.Seconds())
+		m.diagTCPUp.WithLabelValues(target).Set(1)
+		return
+	}
+	m.diagTCPUp.WithLabelValues(target).Set(0)
+}
+
+// ObserveDNSLookup publishes the DNS-resolution result from a diagnostic run.
+func (m *Metrics) ObserveDNSLookup(target string, d time.Duration, ok bool) {
+	if ok {
+		m.diagDNSLookup.WithLabelValues(target).Set(d.Seconds())
+		m.diagDNSUp.WithLabelValues(target).Set(1)
+		return
+	}
+	m.diagDNSUp.WithLabelValues(target).Set(0)
 }
