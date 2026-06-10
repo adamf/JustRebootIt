@@ -127,6 +127,25 @@ type Diagnostics struct {
 	DNSProbe string `yaml:"dns_probe"`
 	// Workers bounds how many diagnostic runs happen concurrently.
 	Workers int `yaml:"workers"`
+	// AI enables an LLM-driven root-cause writeup for each event. It is fully
+	// optional and only activates when an API key is provided via the
+	// ANTHROPIC_API_KEY environment variable.
+	AI AIDiagnostics `yaml:"ai"`
+}
+
+// AIDiagnostics configures the optional Claude-driven analysis of an event.
+// Secrets and service URLs (the API key, Prometheus URL, and Grafana
+// credentials) come from environment variables, not this file, so they never
+// land in a committed config or image layer.
+type AIDiagnostics struct {
+	// Enabled turns the feature on. Even when true, it stays dormant unless
+	// ANTHROPIC_API_KEY is set in the environment.
+	Enabled bool `yaml:"enabled"`
+	// Model is the Claude model ID. Defaults to claude-opus-4-8; set
+	// claude-sonnet-4-6 for a cheaper, faster analysis.
+	Model string `yaml:"model"`
+	// MaxIterations bounds the agent's tool-use loop per event.
+	MaxIterations int `yaml:"max_iterations"`
 }
 
 // Default returns a configuration with sane defaults already applied. Loading a
@@ -158,6 +177,11 @@ func Default() Config {
 			TCPPort:          443,
 			DNSProbe:         "www.google.com",
 			Workers:          2,
+			AI: AIDiagnostics{
+				Enabled:       true,
+				Model:         "claude-opus-4-8",
+				MaxIterations: 12,
+			},
 		},
 	}
 }

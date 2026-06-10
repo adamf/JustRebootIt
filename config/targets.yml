@@ -124,3 +124,12 @@ diagnostics:
   tcp_port: 443             # handshake port for the TCP latency test
   dns_probe: www.google.com # name resolved & timed during a diagnostic run
   workers: 2                # concurrent diagnostic runs
+
+  # Optional Claude-driven root-cause analysis of each event. It only activates
+  # when ANTHROPIC_API_KEY is set in the environment (.env); without a key the
+  # prober skips it. The agent queries Prometheus, runs fresh traceroute/DNS,
+  # and attributes hops via RDAP, then posts a numbered writeup to Grafana.
+  ai:
+    enabled: true
+    model: claude-opus-4-8  # set claude-sonnet-4-6 for a cheaper, faster analysis
+    max_iterations: 12      # cap on the agent's tool-use loop per event

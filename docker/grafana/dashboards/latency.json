@@ -20,6 +20,13 @@
         "tagKeys": "target,reason",
         "titleFormat": "diagnostic: {{reason}}",
         "textFormat": "{{target}}"
+      },
+      {
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "iconColor": "purple",
+        "name": "AI diagnosis",
+        "target": { "type": "tags", "matchAny": false, "tags": ["ai-diagnosis"], "limit": 100 }
       }
     ]
   },
@@ -743,6 +750,23 @@
           "refId": "B"
         }
       ]
+    },
+    {
+      "type": "annolist",
+      "id": 45,
+      "title": "AI latency diagnoses",
+      "description": "Plain-language root-cause writeups produced by the Claude agent for each detected event (Event #N). Click an entry to jump to that moment on the dashboard. Requires ANTHROPIC_API_KEY to be set; otherwise this panel stays empty.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 69 },
+      "options": {
+        "onlyFromThisDashboard": false,
+        "onlyInTimeRange": false,
+        "tags": ["ai-diagnosis"],
+        "limit": 20,
+        "showTags": true,
+        "showUser": false,
+        "showTime": true
+      }
     }
   ]
 }
