@@ -15,6 +15,10 @@ import (
 
 // Trigger describes a detected anomaly worth investigating.
 type Trigger struct {
+	// EventID is a monotonic number assigned by the caller (not the detector)
+	// so a triggered event can be tracked across metrics, logs, the dashboard
+	// annotation, and the AI writeup.
+	EventID  int64
 	Target   string
 	Reason   string // "latency" or "loss"
 	Median   time.Duration

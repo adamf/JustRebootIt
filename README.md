@@ -220,6 +220,58 @@ diagnostics:
 Every trigger also drops a **red annotation** across the whole dashboard, so you
 can line up exactly when deeper tests fired against the latency and WAN graphs.
 
+### AI root-cause analysis — "why did this happen?" (optional)
+
+The mechanical diagnostics gather raw signal; this turns it into an explanation.
+When an event fires, a **Claude agent** investigates it and writes a
+plain-language root cause onto the dashboard. It's given read-only tools and
+decides how to use them:
+
+- **query Prometheus** — to see whether the spike hit *every* target at once
+  (upstream/ISP) or just one path, and whether it lined up with the WAN
+  saturating (bufferbloat);
+- **traceroute / DNS lookup** — to re-probe the path and resolution *now*;
+- **RDAP lookup** — to name the operator/ASN that owns a slow or lossy hop (so a
+  bad segment gets attributed to Comcast vs. a transit provider).
+
+Each event gets a **monotonic Event #N** (also exported as
+`diagnostic_event_id{target}`), and the agent's writeup is posted as a numbered,
+tagged **Grafana annotation**. They appear as purple markers on the timeline and
+in the **"AI latency diagnoses"** panel at the bottom of the dashboard — so every
+spike, its diagnostic run, and its explanation line up by number.
+
+**This is fully optional and off by default.** It activates only when you set an
+API key:
+
+```sh
+# in .env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+With no key, the prober simply skips the analysis — everything else works
+unchanged. Tunables live under `diagnostics.ai` in `config/targets.yml`:
+
+```yaml
+diagnostics:
+  ai:
+    enabled: true
+    model: claude-opus-4-8   # set claude-sonnet-4-6 for cheaper, faster analysis
+    max_iterations: 12       # cap on the agent's tool-use loop per event
+```
+
+Two things to know before enabling it:
+
+- **It sends event telemetry to the Anthropic API** — your traceroute hops, IP
+  addresses, and ISP identity are part of what the agent reasons over. Don't
+  enable it if that's not acceptable.
+- **It costs per event** (bounded by the diagnostics `cooldown`, so at most one
+  analysis per target per minute). Opus is the default for best diagnosis;
+  switch `model` to `claude-sonnet-4-6` to cut cost.
+
+The agent posts annotations using the Grafana admin account
+(`GRAFANA_ADMIN_PASSWORD` from `.env`) over the internal Docker network; no
+ports are exposed for this.
+
 ### Secrets / Grafana — `.env`
 
 See `.env.example`. The `.env` file holds your UDM password and is gitignored.
@@ -255,6 +307,9 @@ shared as-is:
    TCP-handshake / DNS-lookup times they captured. **Red annotations** across the
    whole dashboard mark each diagnostic trigger, so you can align "deeper tests
    fired here" with the latency and WAN graphs above.
+7. **AI latency diagnoses** *(if enabled)* — the Claude agent's numbered,
+   plain-language root cause for each event. Purple annotations mark them on the
+   timeline; the panel lists the writeups. Empty unless `ANTHROPIC_API_KEY` is set.
 
 **Sharing with your ISP:** select the time window around an incident, take a
 screenshot of the median-latency and traceroute panels (and the WAN-throughput
@@ -280,6 +335,8 @@ Prober (`:9430/metrics`):
 | `diagnostic_triggered_total{target,reason}` | count of latency/loss-triggered diagnostic runs |
 | `diagnostic_tcp_connect_seconds{target}` / `_up` | TCP handshake time / success from the last run |
 | `diagnostic_dns_lookup_seconds{target}` / `_up` | DNS resolution time / success from the last run |
+| `diagnostic_event_id{target}` | id of the most recent event (maps annotation ↔ run) |
+| `diagnostic_ai_analyzed_total{target}` / `diagnostic_ai_failed_total{target}` | AI analyses completed / failed |
 
 UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,

@@ -14,18 +14,23 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/adamf/justrebootit/internal/aidiag"
 	"github.com/adamf/justrebootit/internal/config"
 	"github.com/adamf/justrebootit/internal/diag"
 	"github.com/adamf/justrebootit/internal/discovery"
+	"github.com/adamf/justrebootit/internal/grafana"
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
@@ -62,6 +67,32 @@ func main() {
 			Alpha:         cfg.Diagnostics.BaselineAlpha,
 		})
 		a.startDiagWorkers()
+
+		// Optional AI root-cause analysis. Stays disabled unless enabled in the
+		// config AND an API key is present; secrets/URLs come from the
+		// environment so they never land in the config file.
+		analyzer, err := aidiag.New(aidiag.Config{
+			Enabled:       cfg.Diagnostics.AI.Enabled,
+			APIKey:        os.Getenv("ANTHROPIC_API_KEY"),
+			Model:         cfg.Diagnostics.AI.Model,
+			MaxIterations: cfg.Diagnostics.AI.MaxIterations,
+			PrometheusURL: env("JRI_PROMETHEUS_URL", "http://prometheus:9090"),
+			Privileged:    cfg.Privileged,
+			TraceMaxHops:  cfg.TraceMaxHops,
+			TraceTimeout:  cfg.TraceTimeout,
+		})
+		if err != nil {
+			log.Fatalf("ai diagnostics: %v", err)
+		}
+		a.analyzer = analyzer
+		if a.analyzer != nil {
+			a.grafana = grafana.New(
+				env("GRAFANA_URL", "http://grafana:3000"),
+				env("GRAFANA_USER", "admin"),
+				os.Getenv("GRAFANA_ADMIN_PASSWORD"),
+			)
+			log.Printf("ai diagnostics enabled (model=%s)", cfg.Diagnostics.AI.Model)
+		}
 	}
 
 	// Always-on targets run for the whole lifetime.
@@ -104,6 +135,13 @@ type app struct {
 
 	detector *diag.Detector
 	diagJobs chan diag.Trigger
+
+	// analyzer and grafana are optional: both stay nil unless the AI
+	// diagnostics are enabled and credentials are present.
+	analyzer *aidiag.Analyzer
+	grafana  *grafana.Client
+	// events assigns each detected anomaly a monotonic id.
+	events atomic.Int64
 
 	wg sync.WaitGroup
 
@@ -235,9 +273,11 @@ func (a *app) maybeDiagnose(t config.Target, res pinger.Result) {
 	if !fired {
 		return
 	}
+	trig.EventID = a.events.Add(1)
 	a.m.DiagTriggered(t.Name, trig.Reason)
-	log.Printf("diagnostic trigger %s: reason=%s median=%s baseline=%s loss=%.0f%%",
-		t.Name, trig.Reason, trig.Median, trig.Baseline, trig.Loss*100)
+	a.m.SetEventID(t.Name, trig.EventID)
+	log.Printf("diagnostic trigger #%d %s: reason=%s median=%s baseline=%s loss=%.0f%%",
+		trig.EventID, t.Name, trig.Reason, trig.Median, trig.Baseline, trig.Loss*100)
 	select {
 	case a.diagJobs <- trig:
 	default:
@@ -272,32 +312,86 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	ev := aidiag.Event{
+		ID:       trig.EventID,
+		Target:   t.Name,
+		Host:     t.Host,
+		Group:    t.Group,
+		Reason:   trig.Reason,
+		Median:   trig.Median,
+		Baseline: trig.Baseline,
+		Loss:     trig.Loss,
+		When:     time.Now(),
+	}
+
+	func() {
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+		defer cancel()
+
+		// Fresh traceroute to capture the path while the problem is happening.
+		tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+		if res, err := tr.Trace(ctx, t.Host); err == nil {
+			a.m.ObserveTrace(t.Name, t.Group, res)
+			ev.Trace = res
+		}
+
+		// TCP handshake latency to the same host.
+		if a.cfg.Diagnostics.TCPPort > 0 {
+			addr := net.JoinHostPort(t.Host, strconv.Itoa(a.cfg.Diagnostics.TCPPort))
+			d, err := diag.TCPConnect(ctx, addr, 5*time.Second)
+			a.m.ObserveTCPConnect(t.Name, d, err == nil)
+			ev.TCPConnect, ev.TCPOK = d, err == nil
+			if err != nil {
+				log.Printf("diagnostic tcp %s (%s): %v", t.Name, addr, err)
+			}
+		}
+
+		// DNS resolution timing.
+		if a.cfg.Diagnostics.DNSProbe != "" {
+			d, err := diag.DNSLookup(ctx, a.cfg.Diagnostics.DNSProbe, 5*time.Second)
+			a.m.ObserveDNSLookup(t.Name, d, err == nil)
+			ev.DNSLookup, ev.DNSOK = d, err == nil
+			if err != nil {
+				log.Printf("diagnostic dns %s (%s): %v", t.Name, a.cfg.Diagnostics.DNSProbe, err)
+			}
+		}
+	}()
+
+	// Optional LLM root-cause analysis, using the mechanical results above as
+	// its starting context. Runs on its own (longer) timeout inside Analyze.
+	a.analyze(ev)
+}
+
+// analyze runs the optional AI investigation for an event and surfaces its
+// writeup as a Grafana annotation. It is a no-op when the analyzer is disabled.
+func (a *app) analyze(ev aidiag.Event) {
+	if a.analyzer == nil {
+		return
+	}
+	res, err := a.analyzer.Analyze(a.ctx, ev)
+	if err != nil {
+		a.m.AIFailed(ev.Target)
+		log.Printf("ai diagnosis #%d %s: %v", ev.ID, ev.Target, err)
+		return
+	}
+	a.m.AIAnalyzed(ev.Target)
+	log.Printf("ai diagnosis #%d %s: %s", ev.ID, ev.Target, res.Headline)
+
+	annCtx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
-
-	// Fresh traceroute to capture the path while the problem is happening.
-	tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
-	if res, err := tr.Trace(ctx, t.Host); err == nil {
-		a.m.ObserveTrace(t.Name, t.Group, res)
+	ann := grafana.Annotation{
+		Time: ev.When,
+		Tags: []string{
+			"justrebootit", "ai-diagnosis",
+			fmt.Sprintf("event:%d", ev.ID),
+			"target:" + ev.Target,
+			"reason:" + ev.Reason,
+		},
+		Text: fmt.Sprintf("**Event #%d — %s** (target %s)\n\n%s",
+			ev.ID, res.Headline, ev.Target, res.Text),
 	}
-
-	// TCP handshake latency to the same host.
-	if a.cfg.Diagnostics.TCPPort > 0 {
-		addr := net.JoinHostPort(t.Host, strconv.Itoa(a.cfg.Diagnostics.TCPPort))
-		d, err := diag.TCPConnect(ctx, addr, 5*time.Second)
-		a.m.ObserveTCPConnect(t.Name, d, err == nil)
-		if err != nil {
-			log.Printf("diagnostic tcp %s (%s): %v", t.Name, addr, err)
-		}
-	}
-
-	// DNS resolution timing.
-	if a.cfg.Diagnostics.DNSProbe != "" {
-		d, err := diag.DNSLookup(ctx, a.cfg.Diagnostics.DNSProbe, 5*time.Second)
-		a.m.ObserveDNSLookup(t.Name, d, err == nil)
-		if err != nil {
-			log.Printf("diagnostic dns %s (%s): %v", t.Name, a.cfg.Diagnostics.DNSProbe, err)
-		}
+	if err := a.grafana.Post(annCtx, ann); err != nil {
+		log.Printf("ai diagnosis #%d: posting annotation: %v", ev.ID, err)
 	}
 }
 
@@ -385,4 +479,12 @@ func (a *app) reconcileDiscovered(selected []discovery.PathInfo) {
 			a.traceLoop(tctx, t)
 		}(t)
 	}
+}
+
+// env returns the value of an environment variable, or def when it is unset.
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

@@ -42,6 +42,9 @@ type Metrics struct {
 	diagTCPUp      *prometheus.GaugeVec
 	diagDNSLookup  *prometheus.GaugeVec
 	diagDNSUp      *prometheus.GaugeVec
+	diagEventID    *prometheus.GaugeVec
+	aiAnalyzed     *prometheus.CounterVec
+	aiFailed       *prometheus.CounterVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -139,6 +142,18 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "diagnostic_dns_lookup_up",
 			Help: "1 if the last diagnostic DNS lookup succeeded, else 0.",
 		}, []string{"target"}),
+		diagEventID: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "diagnostic_event_id",
+			Help: "Monotonic id of the most recent diagnostic event for the target; maps a dashboard annotation to its diagnostic run.",
+		}, []string{"target"}),
+		aiAnalyzed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_ai_analyzed_total",
+			Help: "Count of events for which an AI root-cause analysis completed.",
+		}, []string{"target"}),
+		aiFailed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_ai_failed_total",
+			Help: "Count of events for which an AI root-cause analysis failed.",
+		}, []string{"target"}),
 	}
 
 	reg.MustRegister(
@@ -147,6 +162,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.hopRTT, m.hopInfo, m.pathLen, m.reached,
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
+		m.diagEventID, m.aiAnalyzed, m.aiFailed,
 	)
 	return m
 }
@@ -208,14 +224,28 @@ func (m *Metrics) ClearTarget(target string) {
 	for _, v := range []*prometheus.GaugeVec{
 		m.up, m.loss, m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
 		m.hopRTT, m.hopInfo, m.pathLen, m.reached,
-		m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
+		m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp, m.diagEventID,
 	} {
 		v.DeletePartialMatch(l)
 	}
 	m.sent.DeletePartialMatch(l)
 	m.recv.DeletePartialMatch(l)
 	m.diagTriggered.DeletePartialMatch(l)
+	m.aiAnalyzed.DeletePartialMatch(l)
+	m.aiFailed.DeletePartialMatch(l)
 }
+
+// SetEventID records the id of the most recent diagnostic event for a target,
+// so a dashboard annotation tagged "event:N" can be tied back to its run.
+func (m *Metrics) SetEventID(target string, id int64) {
+	m.diagEventID.WithLabelValues(target).Set(float64(id))
+}
+
+// AIAnalyzed records that an AI analysis completed for a target's event.
+func (m *Metrics) AIAnalyzed(target string) { m.aiAnalyzed.WithLabelValues(target).Inc() }
+
+// AIFailed records that an AI analysis failed for a target's event.
+func (m *Metrics) AIFailed(target string) { m.aiFailed.WithLabelValues(target).Inc() }
 
 // ObserveDiscovery publishes the result of one discovery pass: every candidate's
 // reachability/hop count, and whether it was selected for active probing.
