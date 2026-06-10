@@ -15,7 +15,11 @@ scrape_configs:
       - targets: ["prober:9430"]
 
   - job_name: udm
-    # The exporter scrapes the gateway live on each pull; give it room.
+    # The exporter scrapes the gateway live on each pull, so give it a longer
+    # timeout — and a matching longer interval, since Prometheus requires
+    # scrape_timeout <= scrape_interval (the global 10s interval is too short
+    # for the 15s timeout). 30s cadence is plenty for WAN throughput/load.
+    scrape_interval: 30s
     scrape_timeout: 15s
     static_configs:
       - targets: ["udm-exporter:9431"]
