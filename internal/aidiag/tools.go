@@ -65,7 +65,29 @@ func (a *Analyzer) tools(ev Event) ([]anthropic.BetaTool, error) {
 		return nil, err
 	}
 
+	if a.cfg.UDMExporterURL != "" {
+		if err := add(toolrunner.NewBetaToolFromJSONSchema(
+			"udm_config",
+			"Read the UniFi Dream Machine's current WAN configuration (secrets redacted) as JSON. Use it to check what is ALREADY configured before recommending a change — for example whether Smart Queues / SQM QoS is already enabled and at what up/down rate, the WAN type, and MTU. Do not recommend enabling something that this config shows is already on.",
+			a.udmConfig,
+		)); err != nil {
+			return nil, err
+		}
+	}
+
 	return tools, nil
+}
+
+// udmConfig has no input — it returns the whole (redacted) WAN config.
+type udmConfigInput struct{}
+
+func (a *Analyzer) udmConfig(ctx context.Context, _ udmConfigInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
+	endpoint := strings.TrimRight(a.cfg.UDMExporterURL, "/") + "/config"
+	body, err := a.get(ctx, endpoint)
+	if err != nil {
+		return textResult("udm config unavailable: " + err.Error()), nil
+	}
+	return textResult(body), nil
 }
 
 func textResult(s string) anthropic.BetaToolResultBlockParamContentUnion {

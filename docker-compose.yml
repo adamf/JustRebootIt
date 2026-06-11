@@ -26,6 +26,9 @@ services:
       # Prometheus and posts Grafana annotations over the internal network.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       JRI_PROMETHEUS_URL: http://prometheus:9090
+      # Lets the AI read the gateway's current WAN config (Smart Queues, etc.)
+      # so it doesn't recommend changes you've already made.
+      UDM_EXPORTER_URL: http://udm-exporter:9431
       GRAFANA_URL: http://grafana:3000
       GRAFANA_USER: admin
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -42,6 +45,13 @@ services:
     container_name: jri-udm-exporter
     entrypoint: ["/usr/local/bin/udmexporter"]
     env_file: .env
+    environment:
+      # Also serves the gateway's (secret-redacted) WAN config at /config and
+      # watches it for changes, posting a Grafana annotation when a setting is
+      # altered. GRAFANA_ADMIN_PASSWORD comes from .env (above).
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_USER: admin
+      UDM_CONFIG_INTERVAL: 5m
     restart: unless-stopped
     networks: [monitoring]
 

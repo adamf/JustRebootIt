@@ -27,6 +27,13 @@
         "iconColor": "purple",
         "name": "AI diagnosis",
         "target": { "type": "tags", "matchAny": false, "tags": ["ai-diagnosis"], "limit": 100 }
+      },
+      {
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "iconColor": "orange",
+        "name": "UDM config change",
+        "target": { "type": "tags", "matchAny": false, "tags": ["config-change"], "limit": 100 }
       }
     ]
   },
@@ -40,7 +47,7 @@
       "tooltip": "Render the entire dashboard to a PNG via the image renderer. Opens in a new tab — right-click the image and Save, or attach the link. Honors the current time range and selected target.",
       "type": "link",
       "icon": "external link",
-      "url": "/render/d/justrebootit-home-latency/home-internet-latency?kiosk&width=1600&height=3200",
+      "url": "/render/d/justrebootit-home-latency/home-internet-latency?kiosk&width=1600&height=3600",
       "targetBlank": true,
       "keepTime": true,
       "includeVars": true,
@@ -775,6 +782,23 @@
         "onlyFromThisDashboard": false,
         "onlyInTimeRange": false,
         "tags": ["ai-diagnosis"],
+        "limit": 20,
+        "showTags": true,
+        "showUser": false,
+        "showTime": true
+      }
+    },
+    {
+      "type": "annolist",
+      "id": 46,
+      "title": "UDM config changes",
+      "description": "Changes the udm-exporter detected in the gateway's WAN configuration (e.g. Smart Queues toggled, a rate limit changed). Click an entry to jump to when it happened, so you can see whether a config change helped or hurt latency. Secrets are redacted.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 78 },
+      "options": {
+        "onlyFromThisDashboard": false,
+        "onlyInTimeRange": false,
+        "tags": ["config-change"],
         "limit": 20,
         "showTags": true,
         "showUser": false,

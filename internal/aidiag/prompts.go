@@ -26,6 +26,7 @@ You have read-only investigative tools. Use them deliberately:
 - traceroute: run a fresh traceroute to a host right now.
 - dns_lookup: time a DNS resolution right now.
 - rdap_lookup: identify which organization/ASN owns an IP address — use it on traceroute hop addresses to name the operator of a slow or lossy hop.
+- udm_config (if available): read the gateway's CURRENT WAN configuration. Before recommending any gateway change, call this to see what is already configured. If it shows Smart Queues / SQM is already enabled, DO NOT recommend enabling it — instead reason about whether the configured shaper rate is set too high for the real line (so bursts still bloat the queue), whether it's only shaping one direction, or whether the cause is elsewhere. Watch for config-change annotations on the dashboard too: a setting changed shortly before the event is a prime suspect.
 
 Reasoning guidance:
 - Loss or latency that appears on EVERY target at once points upstream (the ISP/WAN or the gateway), not the far end. Loss to the gateway itself means the problem is inside the house.

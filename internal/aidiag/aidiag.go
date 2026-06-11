@@ -32,6 +32,10 @@ type Config struct {
 	// PrometheusURL is the base URL of the JustRebootIt Prometheus, used by the
 	// prometheus_query_range tool (e.g. http://prometheus:9090).
 	PrometheusURL string
+	// UDMExporterURL is the base URL of the udm-exporter (e.g.
+	// http://udm-exporter:9431), whose /config endpoint exposes the gateway's
+	// WAN configuration to the udm_config tool. Empty disables that tool.
+	UDMExporterURL string
 	// MaxIterations bounds the agent's tool-use loop.
 	MaxIterations int
 	// Timeout bounds a single investigation end to end.
