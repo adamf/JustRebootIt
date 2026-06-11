@@ -323,8 +323,10 @@ server-side instead of taking manual screenshots:
   to a single PNG in a new tab; right-click → Save, or send the link.
 - **A single panel** → its menu → **Share → Direct link rendered image**.
 
-(The tall full-dashboard render uses a fixed height; if the bottom is cut off,
-bump `height=` in the dashboard's link URL — `docker/grafana/dashboards/latency.json`.)
+(The full-dashboard render uses a fixed `height=3200` in the link URL
+(`docker/grafana/dashboards/latency.json`). If you add rows and the bottom gets
+cut off, raise it — and keep `RENDERING_VIEWPORT_MAX_HEIGHT` on the `renderer`
+service in `docker-compose.yml` at or above that value, or the renderer clamps it.)
 
 ## Metrics reference
 

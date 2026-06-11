@@ -40,7 +40,7 @@
       "tooltip": "Render the entire dashboard to a PNG via the image renderer. Opens in a new tab — right-click the image and Save, or attach the link. Honors the current time range and selected target.",
       "type": "link",
       "icon": "external link",
-      "url": "/render/d/justrebootit-home-latency/home-internet-latency?kiosk&width=1600&height=2800",
+      "url": "/render/d/justrebootit-home-latency/home-internet-latency?kiosk&width=1600&height=3200",
       "targetBlank": true,
       "keepTime": true,
       "includeVars": true,
