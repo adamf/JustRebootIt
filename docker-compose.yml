@@ -105,6 +105,11 @@ services:
       # Listen address Grafana points GF_RENDERING_SERVER_URL at.
       HTTP_PORT: "8081"
       RENDERING_MODE: default
+      # The full dashboard is ~3000px tall; raise the viewport cap (default
+      # ~3000) so the "Export dashboard as PNG" link can render it without
+      # clipping the bottom panel.
+      RENDERING_VIEWPORT_MAX_HEIGHT: "4000"
+      RENDERING_VIEWPORT_MAX_WIDTH: "2000"
     expose:
       - "8081"
     restart: unless-stopped
