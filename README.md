@@ -314,7 +314,10 @@ shared as-is:
 **Sharing with your ISP:** select the time window around an incident, take a
 screenshot of the median-latency and traceroute panels (and the WAN-throughput
 panel to pre-empt "you were just using it heavily"), or — since viewing is
-anonymous — send them the Grafana link if they're on your network/VPN.
+anonymous — send them the Grafana link if they're on your network/VPN. The stack
+includes the **Grafana image renderer**, so you can also export a clean PNG
+server-side (a panel's **Share → Export → render image**, or **Direct link
+rendered image**) to attach to an email or ticket — no manual screenshot needed.
 
 ## Metrics reference
 
