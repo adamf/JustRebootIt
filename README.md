@@ -315,9 +315,16 @@ shared as-is:
 screenshot of the median-latency and traceroute panels (and the WAN-throughput
 panel to pre-empt "you were just using it heavily"), or — since viewing is
 anonymous — send them the Grafana link if they're on your network/VPN. The stack
-includes the **Grafana image renderer**, so you can also export a clean PNG
-server-side (a panel's **Share → Export → render image**, or **Direct link
-rendered image**) to attach to an email or ticket — no manual screenshot needed.
+includes the **Grafana image renderer**, so you can export clean PNGs
+server-side instead of taking manual screenshots:
+
+- **Whole dashboard** → the **"Export dashboard as PNG"** link in the dashboard's
+  top-right bar renders the entire board (current time range + selected target)
+  to a single PNG in a new tab; right-click → Save, or send the link.
+- **A single panel** → its menu → **Share → Direct link rendered image**.
+
+(The tall full-dashboard render uses a fixed height; if the bottom is cut off,
+bump `height=` in the dashboard's link URL — `docker/grafana/dashboards/latency.json`.)
 
 ## Metrics reference
 
