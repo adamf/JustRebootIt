@@ -14,6 +14,18 @@ or link-shared with a network engineer at your ISP (e.g. Comcast).
 The probes are written in Go and run fully in parallel, so dozens of targets are
 measured on a tight cycle without the prober itself becoming the bottleneck.
 
+![The JustRebootIt dashboard: latency smoke, per-hop traceroute, UniFi WAN/gateway correlation, path discovery, triggered diagnostics, and AI root-cause writeups.](docs/dashboard.png)
+
+> **A real diagnosis from the dashboard above (Event #6):** *"The latency on
+> 8.8.4.4 was not specific to Google — it was local bufferbloat on the WAN uplink
+> during a traffic burst… the median RTT to every anchor jumped together, so the
+> spike was shared across all independent paths… `udm_wan_rx` hit ~15.2 MB/s and
+> WAN latency climbed from ~10–11ms baseline to 33ms. This is the classic
+> bufferbloat pattern: the local uplink filled and queued packets. Confidence:
+> high. Recommended action: enable Smart Queues (SQM/CAKE) on the UDM Pro with
+> limits ~85–90% of the measured line rate — this is a local fix, not an ISP
+> ticket."* — written automatically by the AI analysis when the event fired.
+
 ```
                  ┌─────────────┐     ICMP ping + traceroute
                  │   prober    │────────────────────────────►  many targets
@@ -393,5 +405,10 @@ make up       # docker compose up -d --build
 ```
 
 Layout: `cmd/prober` and `cmd/udmexporter` are the two binaries (one image, two
-entrypoints); `internal/{config,pinger,tracer,metrics,udm}` hold the logic;
-`docker/` holds Prometheus + Grafana provisioning and the dashboard JSON.
+entrypoints); `internal/{config,pinger,tracer,metrics,udm,discovery,diag,aidiag,grafana}`
+hold the logic; `docker/` holds Prometheus + Grafana provisioning and the
+dashboard JSON.
+
+## License
+
+[MIT](LICENSE) © 2026 Adam Fletcher.
