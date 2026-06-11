@@ -335,7 +335,7 @@ server-side instead of taking manual screenshots:
   to a single PNG in a new tab; right-click → Save, or send the link.
 - **A single panel** → its menu → **Share → Direct link rendered image**.
 
-(The full-dashboard render uses a fixed `height=3200` in the link URL
+(The full-dashboard render uses a fixed `height=3600` in the link URL
 (`docker/grafana/dashboards/latency.json`). If you add rows and the bottom gets
 cut off, raise it — and keep `RENDERING_VIEWPORT_MAX_HEIGHT` on the `renderer`
 service in `docker-compose.yml` at or above that value, or the renderer clamps it.)
@@ -366,7 +366,32 @@ UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,
 `udm_speedtest_{download,upload}_mbps`, `udm_speedtest_ping_ms`,
 `udm_gateway_cpu_percent`, `udm_gateway_memory_percent`,
-`udm_gateway_uptime_seconds`, `udm_clients`.
+`udm_gateway_uptime_seconds`, `udm_clients`, `udm_config_change_total`.
+
+## Gateway config awareness & change events
+
+The udm-exporter also reads the gateway's **WAN configuration** (Smart Queues /
+SQM, rate limits, WAN type, MTU — with secrets like PPPoE passwords redacted)
+and uses it two ways:
+
+- It serves that config at `/config`, which the **AI analysis reads** via a
+  `udm_config` tool. This stops the classic "the AI keeps telling me to enable
+  Smart Queues, but I already did" problem — the agent checks what's actually
+  configured first, and instead reasons about whether the *configured* shaper
+  rate is set too high for the real line, or whether the cause is elsewhere.
+- It **watches that config for changes** (every `UDM_CONFIG_INTERVAL`, default
+  5m). When a setting changes, it posts an orange **config-change annotation**
+  to Grafana describing exactly what changed (`wan_smartq_enabled: false → true`)
+  and bumps `udm_config_change_total`. Those show up on the timeline and in the
+  **"UDM config changes"** panel — so you can see whether enabling SQM (or any
+  tweak) actually moved latency, and a change made just before a spike becomes a
+  prime suspect.
+
+This needs the exporter to reach Grafana (it uses `GRAFANA_URL` /
+`GRAFANA_ADMIN_PASSWORD` over the internal network) — already wired in
+`docker-compose.yml`. The redacted config is what's sent to the AI; if even that
+is too much to share, leave `ANTHROPIC_API_KEY` unset (the change annotations
+still work without it).
 
 ## Running without a UDM
 

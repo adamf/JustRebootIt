@@ -72,14 +72,15 @@ func main() {
 		// config AND an API key is present; secrets/URLs come from the
 		// environment so they never land in the config file.
 		analyzer, err := aidiag.New(aidiag.Config{
-			Enabled:       cfg.Diagnostics.AI.Enabled,
-			APIKey:        os.Getenv("ANTHROPIC_API_KEY"),
-			Model:         cfg.Diagnostics.AI.Model,
-			MaxIterations: cfg.Diagnostics.AI.MaxIterations,
-			PrometheusURL: env("JRI_PROMETHEUS_URL", "http://prometheus:9090"),
-			Privileged:    cfg.Privileged,
-			TraceMaxHops:  cfg.TraceMaxHops,
-			TraceTimeout:  cfg.TraceTimeout,
+			Enabled:        cfg.Diagnostics.AI.Enabled,
+			APIKey:         os.Getenv("ANTHROPIC_API_KEY"),
+			Model:          cfg.Diagnostics.AI.Model,
+			MaxIterations:  cfg.Diagnostics.AI.MaxIterations,
+			PrometheusURL:  env("JRI_PROMETHEUS_URL", "http://prometheus:9090"),
+			UDMExporterURL: env("UDM_EXPORTER_URL", "http://udm-exporter:9431"),
+			Privileged:     cfg.Privileged,
+			TraceMaxHops:   cfg.TraceMaxHops,
+			TraceTimeout:   cfg.TraceTimeout,
 		})
 		if err != nil {
 			log.Fatalf("ai diagnostics: %v", err)
