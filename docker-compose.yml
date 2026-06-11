@@ -66,7 +66,7 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_DEFAULT_THEME: light
+      GF_USERS_DEFAULT_THEME: dark
       # Zero-click: anonymous viewing is on and the login form is hidden, so
       # opening http://localhost:3000 lands straight on the dashboard with no
       # prompt. It also makes the dashboard shareable with an ISP engineer via a
