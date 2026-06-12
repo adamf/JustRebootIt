@@ -45,6 +45,7 @@ type Metrics struct {
 	diagEventID    *prometheus.GaugeVec
 	aiAnalyzed     *prometheus.CounterVec
 	aiFailed       *prometheus.CounterVec
+	aiSuppressed   *prometheus.CounterVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -154,6 +155,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "diagnostic_ai_failed_total",
 			Help: "Count of events for which an AI root-cause analysis failed.",
 		}, []string{"target"}),
+		aiSuppressed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_ai_suppressed_total",
+			Help: "Count of events that reused a prior analysis or were throttled instead of triggering a new AI investigation, by reason (repeat|rate-limited|budget).",
+		}, []string{"reason"}),
 	}
 
 	reg.MustRegister(
@@ -162,7 +167,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.hopRTT, m.hopInfo, m.pathLen, m.reached,
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
-		m.diagEventID, m.aiAnalyzed, m.aiFailed,
+		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
 	)
 	return m
 }
@@ -246,6 +251,10 @@ func (m *Metrics) AIAnalyzed(target string) { m.aiAnalyzed.WithLabelValues(targe
 
 // AIFailed records that an AI analysis failed for a target's event.
 func (m *Metrics) AIFailed(target string) { m.aiFailed.WithLabelValues(target).Inc() }
+
+// AISuppressed records that an event reused a prior analysis or was throttled
+// instead of triggering a new investigation.
+func (m *Metrics) AISuppressed(reason string) { m.aiSuppressed.WithLabelValues(reason).Inc() }
 
 // ObserveDiscovery publishes the result of one discovery pass: every candidate's
 // reachability/hop count, and whether it was selected for active probing.

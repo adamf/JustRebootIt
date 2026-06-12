@@ -92,7 +92,15 @@ func main() {
 				env("GRAFANA_USER", "admin"),
 				os.Getenv("GRAFANA_ADMIN_PASSWORD"),
 			)
-			log.Printf("ai diagnostics enabled (model=%s)", cfg.Diagnostics.AI.Model)
+			a.coalescer = aidiag.NewCoalescer(aidiag.CoalescerConfig{
+				SharedWindow:    cfg.Diagnostics.AI.SharedWindow,
+				SharedThreshold: cfg.Diagnostics.AI.SharedThreshold,
+				RepeatTTL:       cfg.Diagnostics.AI.RepeatTTL,
+				MinInterval:     cfg.Diagnostics.AI.MinInterval,
+				DailyBudget:     cfg.Diagnostics.AI.DailyBudget,
+			})
+			log.Printf("ai diagnostics enabled (model=%s; repeat_ttl=%s, min_interval=%s, daily_budget=%d)",
+				cfg.Diagnostics.AI.Model, cfg.Diagnostics.AI.RepeatTTL, cfg.Diagnostics.AI.MinInterval, cfg.Diagnostics.AI.DailyBudget)
 		}
 	}
 
@@ -141,6 +149,9 @@ type app struct {
 	// diagnostics are enabled and credentials are present.
 	analyzer *aidiag.Analyzer
 	grafana  *grafana.Client
+	// coalescer gates AI investigations so a recurring incident doesn't pay for
+	// a fresh analysis every cycle. Nil when AI is disabled.
+	coalescer *aidiag.Coalescer
 	// events assigns each detected anomaly a monotonic id.
 	events atomic.Int64
 
@@ -279,6 +290,27 @@ func (a *app) maybeDiagnose(t config.Target, res pinger.Result) {
 	a.m.SetEventID(t.Name, trig.EventID)
 	log.Printf("diagnostic trigger #%d %s: reason=%s median=%s baseline=%s loss=%.0f%%",
 		trig.EventID, t.Name, trig.Reason, trig.Median, trig.Baseline, trig.Loss*100)
+
+	// Coalesce: a recurring/shared incident reuses a prior analysis instead of
+	// launching another (paid) investigation. The trigger is still recorded
+	// above, so the dashboard's per-trigger markers and counts stay honest.
+	if a.coalescer != nil {
+		dec := a.coalescer.Decide(aidiag.Event{
+			ID: trig.EventID, Target: t.Name, Group: t.Group, Reason: trig.Reason,
+		}, time.Now())
+		if !dec.Investigate {
+			a.m.AISuppressed(dec.Skip)
+			if dec.Skip == "repeat" && dec.PriorEventID > 0 {
+				log.Printf("diagnostic #%d %s: %s, grouped under #%d (%s)",
+					trig.EventID, t.Name, dec.Skip, dec.PriorEventID, dec.Signature)
+			} else {
+				log.Printf("diagnostic #%d %s: skipping AI (%s)", trig.EventID, t.Name, dec.Skip)
+			}
+			return
+		}
+		trig.Signature = dec.Signature
+	}
+
 	select {
 	case a.diagJobs <- trig:
 	default:
@@ -314,15 +346,16 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 	}
 
 	ev := aidiag.Event{
-		ID:       trig.EventID,
-		Target:   t.Name,
-		Host:     t.Host,
-		Group:    t.Group,
-		Reason:   trig.Reason,
-		Median:   trig.Median,
-		Baseline: trig.Baseline,
-		Loss:     trig.Loss,
-		When:     time.Now(),
+		ID:        trig.EventID,
+		Target:    t.Name,
+		Host:      t.Host,
+		Group:     t.Group,
+		Reason:    trig.Reason,
+		Median:    trig.Median,
+		Baseline:  trig.Baseline,
+		Loss:      trig.Loss,
+		When:      time.Now(),
+		Signature: trig.Signature,
 	}
 
 	func() {
@@ -372,10 +405,18 @@ func (a *app) analyze(ev aidiag.Event) {
 	res, err := a.analyzer.Analyze(a.ctx, ev)
 	if err != nil {
 		a.m.AIFailed(ev.Target)
+		// Drop the signature so a later event of this kind can retry rather than
+		// reusing a non-existent analysis.
+		if a.coalescer != nil && ev.Signature != "" {
+			a.coalescer.Fail(ev.Signature)
+		}
 		log.Printf("ai diagnosis #%d %s: %v", ev.ID, ev.Target, err)
 		return
 	}
 	a.m.AIAnalyzed(ev.Target)
+	if a.coalescer != nil && ev.Signature != "" {
+		a.coalescer.Record(ev.Signature, res)
+	}
 	log.Printf("ai diagnosis #%d %s: %s", ev.ID, ev.Target, res.Headline)
 
 	annCtx, cancel := context.WithTimeout(a.ctx, 10*time.Second)

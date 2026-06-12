@@ -24,6 +24,9 @@ type Trigger struct {
 	Median   time.Duration
 	Baseline time.Duration
 	Loss     float64
+	// Signature is set by the caller's coalescer when a full investigation is
+	// approved, so the worker can record the resulting analysis for reuse.
+	Signature string
 }
 
 // DetectorConfig tunes the anomaly detector.

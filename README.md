@@ -276,9 +276,26 @@ Two things to know before enabling it:
 - **It sends event telemetry to the Anthropic API** — your traceroute hops, IP
   addresses, and ISP identity are part of what the agent reasons over. Don't
   enable it if that's not acceptable.
-- **It costs per event** (bounded by the diagnostics `cooldown`, so at most one
-  analysis per target per minute). Opus is the default for best diagnosis;
-  switch `model` to `claude-sonnet-4-6` to cut cost.
+- **It costs per investigation.** Opus is the default for best diagnosis; switch
+  `model` to `claude-sonnet-4-6` to cut cost.
+
+**Cost control — investigations are coalesced.** A single shared incident (e.g.
+bufferbloat) spikes *every* target at once, which would otherwise launch dozens
+of identical investigations. To prevent that, each event gets a cheap
+**signature** (`reason` + whether it's a *shared* cross-target incident or an
+*isolated* path), and:
+
+- the **first** event of a signature gets a full investigation; **repeats within
+  `repeat_ttl`** (default 1h) reuse that analysis with **no API call**;
+- a single shared incident collapses to one signature once **`shared_threshold`**
+  targets trip within **`shared_window`** — one investigation, not one per target;
+- a global **`min_interval`** (default 3m) and **`daily_budget`** (default 50)
+  cap spend even across distinct signatures.
+
+Every trigger is still recorded (`diagnostic_triggered_total`, the red markers),
+so nothing is hidden — only the *paid investigations* are deduplicated. Reused /
+throttled events are counted in `diagnostic_ai_suppressed_total{reason}`. Tune
+the knobs under `diagnostics.ai` in `config/targets.yml`.
 
 The agent posts annotations using the Grafana admin account
 (`GRAFANA_ADMIN_PASSWORD` from `.env`) over the internal Docker network; no
@@ -361,6 +378,7 @@ Prober (`:9430/metrics`):
 | `diagnostic_dns_lookup_seconds{target}` / `_up` | DNS resolution time / success from the last run |
 | `diagnostic_event_id{target}` | id of the most recent event (maps annotation ↔ run) |
 | `diagnostic_ai_analyzed_total{target}` / `diagnostic_ai_failed_total{target}` | AI analyses completed / failed |
+| `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget) |
 
 UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,
