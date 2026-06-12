@@ -59,6 +59,9 @@ type Event struct {
 	Baseline time.Duration
 	Loss     float64
 	When     time.Time
+	// Signature is the coalescer's fingerprint for this event, used to record
+	// the resulting analysis for reuse.
+	Signature string
 
 	// Results of the mechanical diagnostics already run for this event.
 	Trace      tracer.Result

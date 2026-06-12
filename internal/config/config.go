@@ -146,6 +146,22 @@ type AIDiagnostics struct {
 	Model string `yaml:"model"`
 	// MaxIterations bounds the agent's tool-use loop per event.
 	MaxIterations int `yaml:"max_iterations"`
+
+	// The following knobs coalesce events so a recurring incident doesn't
+	// trigger (and pay for) a fresh investigation every cycle.
+
+	// RepeatTTL: a repeat of the same event "signature" within this window
+	// reuses the prior analysis instead of calling the AI again.
+	RepeatTTL time.Duration `yaml:"repeat_ttl"`
+	// MinInterval is the global minimum time between full investigations.
+	MinInterval time.Duration `yaml:"min_interval"`
+	// DailyBudget caps full investigations per rolling 24h (0 = unlimited).
+	DailyBudget int `yaml:"daily_budget"`
+	// SharedWindow / SharedThreshold detect a single shared upstream incident:
+	// when at least SharedThreshold distinct targets trip within SharedWindow,
+	// they collapse to one investigation instead of one per target.
+	SharedWindow    time.Duration `yaml:"shared_window"`
+	SharedThreshold int           `yaml:"shared_threshold"`
 }
 
 // Default returns a configuration with sane defaults already applied. Loading a
@@ -178,9 +194,14 @@ func Default() Config {
 			DNSProbe:         "www.google.com",
 			Workers:          2,
 			AI: AIDiagnostics{
-				Enabled:       true,
-				Model:         "claude-opus-4-8",
-				MaxIterations: 12,
+				Enabled:         true,
+				Model:           "claude-opus-4-8",
+				MaxIterations:   12,
+				RepeatTTL:       1 * time.Hour,
+				MinInterval:     3 * time.Minute,
+				DailyBudget:     50,
+				SharedWindow:    2 * time.Minute,
+				SharedThreshold: 3,
 			},
 		},
 	}

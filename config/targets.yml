@@ -133,3 +133,10 @@ diagnostics:
     enabled: true
     model: claude-opus-4-8  # set claude-sonnet-4-6 for a cheaper, faster analysis
     max_iterations: 12      # cap on the agent's tool-use loop per event
+    # Cost control: a recurring/shared incident reuses a prior analysis instead
+    # of paying for a fresh investigation every cycle.
+    repeat_ttl: 1h          # reuse a signature's analysis for this long (no AI call)
+    min_interval: 3m        # global minimum time between full investigations
+    daily_budget: 50        # hard cap on investigations per 24h (0 = unlimited)
+    shared_window: 2m       # window for detecting a shared (cross-target) incident
+    shared_threshold: 3     # this many targets tripping together => one investigation
