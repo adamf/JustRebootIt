@@ -162,6 +162,23 @@ type AIDiagnostics struct {
 	// they collapse to one investigation instead of one per target.
 	SharedWindow    time.Duration `yaml:"shared_window"`
 	SharedThreshold int           `yaml:"shared_threshold"`
+
+	// FarHops marks a target as "far" (not our network) when it's reached in
+	// more than this many hops. Far problems are reused for FarRepeatTTL and
+	// investigated with the cheaper model.
+	FarHops int `yaml:"far_hops"`
+	// FarRepeatTTL is the (longer) reuse window for far problems.
+	FarRepeatTTL time.Duration `yaml:"far_repeat_ttl"`
+
+	// ModelEval, when on, evaluates the cheap model against the expensive one
+	// per problem class and locks in whichever is good enough. When off, near/
+	// shared problems use Model (expensive) and far problems use ModelCheap.
+	ModelEval bool `yaml:"model_eval"`
+	// ModelCheap is the cheaper model (default claude-sonnet-4-6).
+	ModelCheap string `yaml:"model_cheap"`
+	// EvalSamples is how many dual-model evaluations to run per class before
+	// deciding which model to use.
+	EvalSamples int `yaml:"eval_samples"`
 }
 
 // Default returns a configuration with sane defaults already applied. Loading a
@@ -202,6 +219,11 @@ func Default() Config {
 				DailyBudget:     50,
 				SharedWindow:    2 * time.Minute,
 				SharedThreshold: 3,
+				FarHops:         3,
+				FarRepeatTTL:    12 * time.Hour,
+				ModelEval:       true,
+				ModelCheap:      "claude-sonnet-4-6",
+				EvalSamples:     3,
 			},
 		},
 	}

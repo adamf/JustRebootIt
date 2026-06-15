@@ -124,3 +124,40 @@ func TestCoalescerFailAllowsRetry(t *testing.T) {
 		t.Errorf("after Fail, a later event of the same signature should retry, got %+v", d2)
 	}
 }
+
+func TestCoalescerFarUsesLongerTTL(t *testing.T) {
+	c := NewCoalescer(CoalescerConfig{
+		SharedThreshold: 99, // never shared
+		RepeatTTL:       1 * time.Hour,
+		MinInterval:     0,
+		DailyBudget:     0,
+		FarHops:         3,
+		FarTTL:          12 * time.Hour,
+	})
+	now := time.Now()
+
+	// A far target (8 hops) is classified "far" and investigated.
+	d1 := c.Decide(Event{ID: 1, Target: "distant", Group: "anchor", Reason: "latency", Hops: 8}, now)
+	if !d1.Investigate || d1.ScopeKind != "far" {
+		t.Fatalf("8-hop target should be a far investigation, got %+v", d1)
+	}
+
+	// 2 hours later (past RepeatTTL=1h, but within FarTTL=12h): still reused.
+	d2 := c.Decide(Event{ID: 2, Target: "distant", Group: "anchor", Reason: "latency", Hops: 8}, now.Add(2*time.Hour))
+	if d2.Investigate || d2.Skip != "repeat" {
+		t.Errorf("far problem within FarTTL should be reused, got %+v", d2)
+	}
+}
+
+func TestCoalescerNearVsFarScope(t *testing.T) {
+	c := NewCoalescer(CoalescerConfig{
+		SharedThreshold: 99, RepeatTTL: time.Hour, MinInterval: 0, FarHops: 3, FarTTL: 12 * time.Hour,
+	})
+	now := time.Now()
+	if d := c.Decide(Event{ID: 1, Target: "near1", Reason: "latency", Hops: 2}, now); d.ScopeKind != "near" {
+		t.Errorf("2-hop target should be near, got %q", d.ScopeKind)
+	}
+	if d := c.Decide(Event{ID: 2, Target: "unknown", Reason: "latency", Hops: 0}, now); d.ScopeKind != "near" {
+		t.Errorf("unknown distance should default to near, got %q", d.ScopeKind)
+	}
+}

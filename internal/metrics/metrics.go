@@ -46,6 +46,8 @@ type Metrics struct {
 	aiAnalyzed     *prometheus.CounterVec
 	aiFailed       *prometheus.CounterVec
 	aiSuppressed   *prometheus.CounterVec
+	aiModelUsed    *prometheus.CounterVec
+	aiEvalRuns     prometheus.Counter
 }
 
 // New constructs the collectors and registers them with reg.
@@ -159,6 +161,14 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "diagnostic_ai_suppressed_total",
 			Help: "Count of events that reused a prior analysis or were throttled instead of triggering a new AI investigation, by reason (repeat|rate-limited|budget).",
 		}, []string{"reason"}),
+		aiModelUsed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_ai_model_used_total",
+			Help: "Count of AI investigations by the Claude model that produced the analysis.",
+		}, []string{"model"}),
+		aiEvalRuns: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "diagnostic_ai_eval_runs_total",
+			Help: "Count of dual-model evaluation runs (cheap vs expensive + judge).",
+		}),
 	}
 
 	reg.MustRegister(
@@ -168,6 +178,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
+		m.aiModelUsed, m.aiEvalRuns,
 	)
 	return m
 }
@@ -255,6 +266,12 @@ func (m *Metrics) AIFailed(target string) { m.aiFailed.WithLabelValues(target).I
 // AISuppressed records that an event reused a prior analysis or was throttled
 // instead of triggering a new investigation.
 func (m *Metrics) AISuppressed(reason string) { m.aiSuppressed.WithLabelValues(reason).Inc() }
+
+// AIModelUsed records which model produced an analysis.
+func (m *Metrics) AIModelUsed(model string) { m.aiModelUsed.WithLabelValues(model).Inc() }
+
+// AIEvalRun records a dual-model evaluation run.
+func (m *Metrics) AIEvalRun() { m.aiEvalRuns.Inc() }
 
 // ObserveDiscovery publishes the result of one discovery pass: every candidate's
 // reachability/hop count, and whether it was selected for active probing.
