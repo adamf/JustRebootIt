@@ -140,3 +140,10 @@ diagnostics:
     daily_budget: 50        # hard cap on investigations per 24h (0 = unlimited)
     shared_window: 2m       # window for detecting a shared (cross-target) incident
     shared_threshold: 3     # this many targets tripping together => one investigation
+    # Distance: far targets aren't our internet problem, so suppress them harder.
+    far_hops: 3             # a target reached in more than this many hops is "far"
+    far_repeat_ttl: 12h     # reuse a far problem's analysis this long (vs repeat_ttl)
+    # Model selection: learn cheap-vs-expensive per problem class to cut cost.
+    model_eval: true        # eval cheap vs expensive and lock in the good-enough one
+    model_cheap: claude-sonnet-4-6  # used for far problems and classes where cheap suffices
+    eval_samples: 3         # dual-model evals per class before deciding

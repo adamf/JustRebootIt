@@ -27,6 +27,10 @@ type Trigger struct {
 	// Signature is set by the caller's coalescer when a full investigation is
 	// approved, so the worker can record the resulting analysis for reuse.
 	Signature string
+	// ScopeKind ("shared"/"near"/"far") and Hops carry the event's distance
+	// classification through to the worker, which uses them to pick a model.
+	ScopeKind string
+	Hops      int
 }
 
 // DetectorConfig tunes the anomaly detector.

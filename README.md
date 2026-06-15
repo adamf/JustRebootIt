@@ -290,7 +290,21 @@ of identical investigations. To prevent that, each event gets a cheap
 - a single shared incident collapses to one signature once **`shared_threshold`**
   targets trip within **`shared_window`** — one investigation, not one per target;
 - a global **`min_interval`** (default 3m) and **`daily_budget`** (default 50)
-  cap spend even across distinct signatures.
+  cap spend even across distinct signatures;
+- **distant problems are suppressed harder.** A target reached in more than
+  **`far_hops`** (default 3) is "far" — a remote outage isn't *our* internet
+  problem — so its analysis is reused for **`far_repeat_ttl`** (default 12h)
+  instead of the normal `repeat_ttl`.
+
+**Cheap vs. expensive model, learned per problem.** With **`model_eval`** on
+(default), each problem *class* (`reason` + shared/near/far) is evaluated: its
+first **`eval_samples`** (default 3) events run **both** `model` (Opus) and
+`model_cheap` (Sonnet), and a tiny judge call decides whether the cheaper one
+reached the same root cause. Once a majority agree, the class **locks in the
+cheaper model**; otherwise it keeps the expensive one. **Far problems always use
+the cheap model** (no eval). Set `model_eval: false` to just use Opus for
+near/shared and Sonnet for far. Which model ran each investigation is in
+`diagnostic_ai_model_used_total{model}`.
 
 Every trigger is still recorded (`diagnostic_triggered_total`, the red markers),
 so nothing is hidden — only the *paid investigations* are deduplicated. Reused /
@@ -379,6 +393,8 @@ Prober (`:9430/metrics`):
 | `diagnostic_event_id{target}` | id of the most recent event (maps annotation ↔ run) |
 | `diagnostic_ai_analyzed_total{target}` / `diagnostic_ai_failed_total{target}` | AI analyses completed / failed |
 | `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget) |
+| `diagnostic_ai_model_used_total{model}` | investigations by the model that produced the analysis |
+| `diagnostic_ai_eval_runs_total` | dual-model evaluation runs (cheap vs expensive + judge) |
 
 UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,

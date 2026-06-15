@@ -27,8 +27,11 @@ type Config struct {
 	Enabled bool
 	// APIKey is the Anthropic API key. When empty, no Analyzer is built.
 	APIKey string
-	// Model is the Claude model ID (default claude-opus-4-8).
+	// Model is the expensive/default Claude model ID (default claude-opus-4-8).
 	Model string
+	// ModelCheap is the cheaper model used for far problems and for classes
+	// where evaluation found it good enough (default claude-sonnet-4-6).
+	ModelCheap string
 	// PrometheusURL is the base URL of the JustRebootIt Prometheus, used by the
 	// prometheus_query_range tool (e.g. http://prometheus:9090).
 	PrometheusURL string
@@ -62,6 +65,12 @@ type Event struct {
 	// Signature is the coalescer's fingerprint for this event, used to record
 	// the resulting analysis for reuse.
 	Signature string
+	// Hops is the last-known hop distance to the target (0 = unknown), used to
+	// tell our-network problems from distant ones.
+	Hops int
+	// ScopeKind is the coalescer's classification ("shared"/"near"/"far"), used
+	// to pick which model investigates.
+	ScopeKind string
 
 	// Results of the mechanical diagnostics already run for this event.
 	Trace      tracer.Result
@@ -78,6 +87,8 @@ type Analysis struct {
 	Headline string
 	// Text is the full writeup (root cause, confidence, recommendation).
 	Text string
+	// Model is the Claude model that produced this analysis.
+	Model string
 }
 
 // Analyzer investigates events with a Claude agent.
@@ -97,6 +108,9 @@ func New(cfg Config) (*Analyzer, error) {
 	if cfg.Model == "" {
 		cfg.Model = string(anthropic.ModelClaudeOpus4_8)
 	}
+	if cfg.ModelCheap == "" {
+		cfg.ModelCheap = string(anthropic.ModelClaudeSonnet4_6)
+	}
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = 12
 	}
@@ -110,10 +124,18 @@ func New(cfg Config) (*Analyzer, error) {
 	}, nil
 }
 
-// Analyze runs the agent against one event and returns its writeup.
-func (a *Analyzer) Analyze(ctx context.Context, ev Event) (Analysis, error) {
+// ExpensiveModel and CheapModel expose the configured model IDs.
+func (a *Analyzer) ExpensiveModel() string { return a.cfg.Model }
+func (a *Analyzer) CheapModel() string     { return a.cfg.ModelCheap }
+
+// Analyze runs the agent against one event with the given model (empty uses the
+// expensive default) and returns its writeup.
+func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysis, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.Timeout)
 	defer cancel()
+	if model == "" {
+		model = a.cfg.Model
+	}
 
 	tools, err := a.tools(ev)
 	if err != nil {
@@ -122,7 +144,7 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event) (Analysis, error) {
 
 	runner := a.client.Beta.Messages.NewToolRunner(tools, anthropic.BetaToolRunnerParams{
 		BetaMessageNewParams: anthropic.BetaMessageNewParams{
-			Model:     anthropic.Model(a.cfg.Model),
+			Model:     anthropic.Model(model),
 			MaxTokens: 6000,
 			// Let Claude decide how much to reason; investigation benefits from it.
 			Thinking: anthropic.BetaThinkingConfigParamUnion{
@@ -160,7 +182,41 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event) (Analysis, error) {
 		EventID:  ev.ID,
 		Headline: firstLine(text),
 		Text:     text,
+		Model:    model,
 	}, nil
+}
+
+// Judge asks the cheap model whether two analyses identify the same primary root
+// cause and location. It is a single, tool-less, low-token call used to decide
+// whether the cheaper model was "good enough" for a class of problem.
+func (a *Analyzer) Judge(ctx context.Context, expensive, cheap Analysis) (bool, error) {
+	jctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	prompt := "Two network-diagnostics analyses were written for the SAME latency event. " +
+		"Do they identify the same PRIMARY root cause and the same location in the path " +
+		"(e.g. both say local bufferbloat, or both blame the same ISP hop)? Minor wording or " +
+		"extra detail doesn't matter — only whether an operator would take the same action. " +
+		"Answer with exactly one word: YES or NO.\n\n" +
+		"--- Analysis A ---\n" + expensive.Text + "\n\n--- Analysis B ---\n" + cheap.Text
+
+	msg, err := a.client.Messages.New(jctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(a.cfg.ModelCheap),
+		MaxTokens: 16,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	var out strings.Builder
+	for _, block := range msg.Content {
+		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
+			out.WriteString(t.Text)
+		}
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(out.String())), "yes"), nil
 }
 
 // firstLine returns the first non-empty line, stripped of a leading markdown

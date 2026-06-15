@@ -75,6 +75,7 @@ func main() {
 			Enabled:        cfg.Diagnostics.AI.Enabled,
 			APIKey:         os.Getenv("ANTHROPIC_API_KEY"),
 			Model:          cfg.Diagnostics.AI.Model,
+			ModelCheap:     cfg.Diagnostics.AI.ModelCheap,
 			MaxIterations:  cfg.Diagnostics.AI.MaxIterations,
 			PrometheusURL:  env("JRI_PROMETHEUS_URL", "http://prometheus:9090"),
 			UDMExporterURL: env("UDM_EXPORTER_URL", "http://udm-exporter:9431"),
@@ -98,9 +99,15 @@ func main() {
 				RepeatTTL:       cfg.Diagnostics.AI.RepeatTTL,
 				MinInterval:     cfg.Diagnostics.AI.MinInterval,
 				DailyBudget:     cfg.Diagnostics.AI.DailyBudget,
+				FarHops:         cfg.Diagnostics.AI.FarHops,
+				FarTTL:          cfg.Diagnostics.AI.FarRepeatTTL,
 			})
-			log.Printf("ai diagnostics enabled (model=%s; repeat_ttl=%s, min_interval=%s, daily_budget=%d)",
-				cfg.Diagnostics.AI.Model, cfg.Diagnostics.AI.RepeatTTL, cfg.Diagnostics.AI.MinInterval, cfg.Diagnostics.AI.DailyBudget)
+			a.selector = aidiag.NewModelSelector(
+				analyzer.CheapModel(), analyzer.ExpensiveModel(),
+				cfg.Diagnostics.AI.ModelEval, cfg.Diagnostics.AI.EvalSamples)
+			log.Printf("ai diagnostics enabled (model=%s, cheap=%s, eval=%t; repeat_ttl=%s far_ttl=%s far_hops=%d daily_budget=%d)",
+				cfg.Diagnostics.AI.Model, analyzer.CheapModel(), cfg.Diagnostics.AI.ModelEval,
+				cfg.Diagnostics.AI.RepeatTTL, cfg.Diagnostics.AI.FarRepeatTTL, cfg.Diagnostics.AI.FarHops, cfg.Diagnostics.AI.DailyBudget)
 		}
 	}
 
@@ -152,6 +159,9 @@ type app struct {
 	// coalescer gates AI investigations so a recurring incident doesn't pay for
 	// a fresh analysis every cycle. Nil when AI is disabled.
 	coalescer *aidiag.Coalescer
+	// selector picks the cheap vs expensive model per problem class. Nil when AI
+	// is disabled.
+	selector *aidiag.ModelSelector
 	// events assigns each detected anomaly a monotonic id.
 	events atomic.Int64
 
@@ -164,6 +174,9 @@ type app struct {
 	// discovered tracks the cancel func for each discovery-promoted target so
 	// they can be stopped when no longer selected.
 	discovered map[string]context.CancelFunc
+	// reachHops is the last-known hop distance per target, fed by traceroutes
+	// and discovery, so an event can be classified near vs far.
+	reachHops map[string]int
 }
 
 func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
@@ -174,7 +187,33 @@ func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
 		diagJobs:   make(chan diag.Trigger, 64),
 		registry:   make(map[string]config.Target),
 		discovered: make(map[string]context.CancelFunc),
+		reachHops:  make(map[string]int),
 	}
+}
+
+// recordHops stores the measured hop distance to a target.
+func (a *app) recordHops(target string, hops int) {
+	if hops <= 0 {
+		return
+	}
+	a.mu.Lock()
+	a.reachHops[target] = hops
+	a.mu.Unlock()
+}
+
+// hops returns the last-known hop distance to a target (0 = unknown).
+func (a *app) hops(target string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reachHops[target]
+}
+
+// traceHops derives the destination's hop distance from a traceroute result.
+func traceHops(r tracer.Result) int {
+	if r.Reached && len(r.Hops) > 0 {
+		return r.Hops[len(r.Hops)-1].TTL
+	}
+	return len(r.Hops)
 }
 
 func metricsHandler(reg *prometheus.Registry) http.Handler {
@@ -264,6 +303,7 @@ func (a *app) traceLoop(ctx context.Context, t config.Target) {
 			log.Printf("trace %s (%s): %v", t.Name, t.Host, err)
 		} else {
 			a.m.ObserveTrace(t.Name, t.Group, res)
+			a.recordHops(t.Name, traceHops(res))
 		}
 
 		select {
@@ -295,20 +335,23 @@ func (a *app) maybeDiagnose(t config.Target, res pinger.Result) {
 	// launching another (paid) investigation. The trigger is still recorded
 	// above, so the dashboard's per-trigger markers and counts stay honest.
 	if a.coalescer != nil {
+		hops := a.hops(t.Name)
 		dec := a.coalescer.Decide(aidiag.Event{
-			ID: trig.EventID, Target: t.Name, Group: t.Group, Reason: trig.Reason,
+			ID: trig.EventID, Target: t.Name, Group: t.Group, Reason: trig.Reason, Hops: hops,
 		}, time.Now())
 		if !dec.Investigate {
 			a.m.AISuppressed(dec.Skip)
 			if dec.Skip == "repeat" && dec.PriorEventID > 0 {
-				log.Printf("diagnostic #%d %s: %s, grouped under #%d (%s)",
-					trig.EventID, t.Name, dec.Skip, dec.PriorEventID, dec.Signature)
+				log.Printf("diagnostic #%d %s: %s, grouped under #%d (%s, scope=%s)",
+					trig.EventID, t.Name, dec.Skip, dec.PriorEventID, dec.Signature, dec.ScopeKind)
 			} else {
-				log.Printf("diagnostic #%d %s: skipping AI (%s)", trig.EventID, t.Name, dec.Skip)
+				log.Printf("diagnostic #%d %s: skipping AI (%s, scope=%s)", trig.EventID, t.Name, dec.Skip, dec.ScopeKind)
 			}
 			return
 		}
 		trig.Signature = dec.Signature
+		trig.ScopeKind = dec.ScopeKind
+		trig.Hops = hops
 	}
 
 	select {
@@ -356,6 +399,8 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 		Loss:      trig.Loss,
 		When:      time.Now(),
 		Signature: trig.Signature,
+		Hops:      trig.Hops,
+		ScopeKind: trig.ScopeKind,
 	}
 
 	func() {
@@ -367,6 +412,7 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 		if res, err := tr.Trace(ctx, t.Host); err == nil {
 			a.m.ObserveTrace(t.Name, t.Group, res)
 			ev.Trace = res
+			a.recordHops(t.Name, traceHops(res))
 		}
 
 		// TCP handshake latency to the same host.
@@ -397,12 +443,26 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 }
 
 // analyze runs the optional AI investigation for an event and surfaces its
-// writeup as a Grafana annotation. It is a no-op when the analyzer is disabled.
+// writeup as a Grafana annotation. It picks the model via the selector (and may
+// evaluate cheap vs expensive). It is a no-op when the analyzer is disabled.
 func (a *app) analyze(ev aidiag.Event) {
 	if a.analyzer == nil {
 		return
 	}
-	res, err := a.analyzer.Analyze(a.ctx, ev)
+
+	class := ev.Reason + "|" + ev.ScopeKind
+	plan := a.selector.Plan(class, ev.ScopeKind)
+
+	var res aidiag.Analysis
+	var err error
+	if plan.Eval {
+		res, err = a.evalModels(ev, class)
+	} else {
+		res, err = a.analyzer.Analyze(a.ctx, ev, plan.Model)
+		if err == nil {
+			a.m.AIModelUsed(res.Model)
+		}
+	}
 	if err != nil {
 		a.m.AIFailed(ev.Target)
 		// Drop the signature so a later event of this kind can retry rather than
@@ -417,7 +477,8 @@ func (a *app) analyze(ev aidiag.Event) {
 	if a.coalescer != nil && ev.Signature != "" {
 		a.coalescer.Record(ev.Signature, res)
 	}
-	log.Printf("ai diagnosis #%d %s: %s", ev.ID, ev.Target, res.Headline)
+	log.Printf("ai diagnosis #%d %s [%s, scope=%s, model=%s]: %s",
+		ev.ID, ev.Target, plan.Model, ev.ScopeKind, res.Model, res.Headline)
 
 	annCtx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
@@ -437,6 +498,53 @@ func (a *app) analyze(ev aidiag.Event) {
 	}
 }
 
+// evalModels investigates an event with BOTH the cheap and expensive models
+// concurrently, asks the judge whether the cheap analysis was as good, and
+// records that verdict so the class eventually settles on one model. It returns
+// the expensive analysis (best quality) to surface, falling back to whichever
+// model succeeded if one errored.
+func (a *app) evalModels(ev aidiag.Event, class string) (aidiag.Analysis, error) {
+	a.m.AIEvalRun()
+	type result struct {
+		an  aidiag.Analysis
+		err error
+	}
+	expCh, cheapCh := make(chan result, 1), make(chan result, 1)
+	go func() {
+		an, err := a.analyzer.Analyze(a.ctx, ev, a.analyzer.ExpensiveModel())
+		expCh <- result{an, err}
+	}()
+	go func() {
+		an, err := a.analyzer.Analyze(a.ctx, ev, a.analyzer.CheapModel())
+		cheapCh <- result{an, err}
+	}()
+	exp, cheap := <-expCh, <-cheapCh
+
+	for _, r := range []result{exp, cheap} {
+		if r.err == nil {
+			a.m.AIModelUsed(r.an.Model)
+		}
+	}
+	switch {
+	case exp.err != nil && cheap.err != nil:
+		return aidiag.Analysis{}, exp.err
+	case exp.err != nil: // can't compare; just use cheap
+		return cheap.an, nil
+	case cheap.err != nil:
+		return exp.an, nil
+	}
+
+	agree, jerr := a.analyzer.Judge(a.ctx, exp.an, cheap.an)
+	if jerr != nil {
+		log.Printf("model eval #%d: judge failed, treating as disagreement: %v", ev.ID, jerr)
+		agree = false
+	}
+	if decided, chosen := a.selector.Record(class, agree); decided {
+		log.Printf("model eval: class %q decided -> %s (cheap agreed=%t on final sample)", class, chosen, agree)
+	}
+	return exp.an, nil
+}
+
 // runDiscovery periodically traces the candidate pool, selects a path-diverse
 // subset, and reconciles the set of discovery-promoted probe targets. The first
 // pass runs immediately so discovered targets come online at startup.
@@ -450,6 +558,11 @@ func (a *app) runDiscovery(ctx context.Context) {
 		selectedSet := make(map[string]bool, len(selected))
 		for _, p := range selected {
 			selectedSet[p.Name] = true
+		}
+		// Discovery already traced every candidate — feed those hop counts in so
+		// events can be classified near vs far without an extra trace.
+		for _, p := range paths {
+			a.recordHops(p.Name, p.ReachHops)
 		}
 		a.m.ObserveDiscovery(paths, selectedSet)
 		a.reconcileDiscovered(selected)
