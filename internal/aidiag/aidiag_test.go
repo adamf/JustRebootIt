@@ -2,6 +2,7 @@ package aidiag
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,40 @@ func TestNewDisabledReturnsNil(t *testing.T) {
 	}
 	if a, err := New(Config{Enabled: true, APIKey: "sk-test"}); err != nil || a == nil {
 		t.Errorf("enabled+key: got (%v, %v), want non-nil analyzer", a, err)
+	}
+}
+
+func TestNewLocalModelNeedsNoKey(t *testing.T) {
+	// A local, Anthropic-compatible endpoint usually ignores auth, so a BaseURL
+	// alone (no API key) must still build an Analyzer.
+	a, err := New(Config{Enabled: true, BaseURL: "http://localhost:11434"})
+	if err != nil || a == nil {
+		t.Errorf("local base URL, no key: got (%v, %v), want non-nil analyzer", a, err)
+	}
+}
+
+func TestNewClearsEmptyBaseURLEnv(t *testing.T) {
+	// The anthropic SDK reads ANTHROPIC_BASE_URL via os.LookupEnv, which treats a
+	// present-but-empty value as set and would point the client at an empty base
+	// URL. With no BaseURL configured, New must clear that stray env var so the
+	// SDK uses its default endpoint.
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	if _, err := New(Config{Enabled: true, APIKey: "sk-test"}); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if v, ok := os.LookupEnv("ANTHROPIC_BASE_URL"); ok {
+		t.Errorf("empty ANTHROPIC_BASE_URL should have been cleared, still set to %q", v)
+	}
+}
+
+func TestManualPromptIsHealthCheck(t *testing.T) {
+	ev := Event{ID: 3, Target: "home-gateway", Host: "192.168.1.1", Group: "gateway", Reason: "manual",
+		When: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)}
+	p := userPrompt(ev)
+	for _, want := range []string{"health check #3", "home-gateway", "baseline", "No specific"} {
+		if !strings.Contains(p, want) && !strings.Contains(strings.ToLower(p), strings.ToLower(want)) {
+			t.Errorf("manual prompt missing %q\n---\n%s", want, p)
+		}
 	}
 }
 

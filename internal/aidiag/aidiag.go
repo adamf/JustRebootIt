@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ type Config struct {
 	Enabled bool
 	// APIKey is the Anthropic API key. When empty, no Analyzer is built.
 	APIKey string
+	// BaseURL overrides the Anthropic API endpoint (option.WithBaseURL). Empty
+	// uses the default. Point it at a local, Anthropic-compatible server to run a
+	// local model at zero per-request cost.
+	BaseURL string
 	// Model is the expensive/default Claude model ID (default claude-opus-4-8).
 	Model string
 	// ModelCheap is the cheaper model used for far problems and for classes
@@ -102,8 +107,14 @@ type Analyzer struct {
 // no API key is set, so callers can unconditionally call New and simply skip
 // analysis when it returns nil.
 func New(cfg Config) (*Analyzer, error) {
-	if !cfg.Enabled || cfg.APIKey == "" {
+	// The feature needs either a real API key or a local endpoint (BaseURL). A
+	// local Anthropic-compatible server usually ignores auth, so allow a missing
+	// key when BaseURL is set, supplying a placeholder so the SDK is happy.
+	if !cfg.Enabled || (cfg.APIKey == "" && cfg.BaseURL == "") {
 		return nil, nil
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = "local"
 	}
 	if cfg.Model == "" {
 		cfg.Model = string(anthropic.ModelClaudeOpus4_8)
@@ -117,8 +128,19 @@ func New(cfg Config) (*Analyzer, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 3 * time.Minute
 	}
+	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
+	if cfg.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	} else {
+		// The SDK reads ANTHROPIC_BASE_URL from the environment with os.LookupEnv,
+		// which treats a present-but-empty value (e.g. a docker-compose variable
+		// that resolves to "") as a real setting and points the client at an empty
+		// base URL — breaking every request. Clear it so the SDK falls back to its
+		// production default endpoint.
+		os.Unsetenv("ANTHROPIC_BASE_URL")
+	}
 	return &Analyzer{
-		client: anthropic.NewClient(option.WithAPIKey(cfg.APIKey)),
+		client: anthropic.NewClient(opts...),
 		cfg:    cfg,
 		http:   &http.Client{Timeout: 20 * time.Second},
 	}, nil

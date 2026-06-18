@@ -465,11 +465,61 @@
       ]
     },
     {
+      "type": "volkovlabs-form-panel",
+      "id": 24,
+      "title": "Ask the AI to take a look — $target",
+      "description": "Kicks off an on-demand AI root-cause investigation of the selected target (fresh traceroute + TCP + DNS, then an LLM writeup). The result appears as an annotation on the timeline within ~30–90s. The request is proxied server-side through Grafana to the prober, so no prober port is exposed. Rate-limited; a local model can be configured for zero cost.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 10, "w": 6, "x": 0, "y": 35 },
+      "options": {
+        "sync": false,
+        "layout": { "variant": "none", "padding": 10 },
+        "saveDefault": { "variant": "hidden" },
+        "reset": { "variant": "hidden" },
+        "submit": { "variant": "primary", "text": "🔍 Take a look (~60s)", "icon": "search", "size": "md" },
+        "initial": { "method": "-" },
+        "updateEnabled": "auto",
+        "update": {
+          "method": "datasource",
+          "datasource": "justrebootit-prober",
+          "payloadMode": "all",
+          "confirm": false,
+          "payload": {
+            "refId": "A",
+            "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "justrebootit-prober" },
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "format": "table",
+            "root_selector": "",
+            "url": "http://prober:9430/api/investigate",
+            "url_options": {
+              "method": "POST",
+              "body_type": "raw",
+              "body_content_type": "application/json",
+              "data": "{\"target\":\"$target\"}"
+            }
+          }
+        },
+        "elements": [
+          {
+            "id": "target",
+            "uid": "target",
+            "title": "Target — the AI writeup posts to the timeline & the 'AI latency diagnoses' panel below in ~30–90s (not here)",
+            "type": "string",
+            "section": "",
+            "value": "$target",
+            "disabled": true
+          }
+        ]
+      }
+    },
+    {
       "type": "row",
       "id": 30,
       "title": "UniFi Dream Machine — WAN & gateway load",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }
     },
     {
       "type": "timeseries",
@@ -477,7 +527,7 @@
       "title": "WAN throughput",
       "description": "Live WAN download/upload rate. Compare against the latency panels above: latency spikes that line up with throughput maxing out indicate congestion / bufferbloat rather than an ISP fault.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
       "fieldConfig": {
         "defaults": {
           "unit": "bps",
@@ -515,7 +565,7 @@
       "id": 32,
       "title": "Gateway CPU & memory",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -555,7 +605,7 @@
       "id": 33,
       "title": "Gateway-reported latency & speedtest ping",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 54 },
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
@@ -593,7 +643,7 @@
       "id": 34,
       "title": "Connected clients",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 54 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -625,7 +675,7 @@
       "id": 40,
       "title": "Path discovery & triggered diagnostics",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 }
     },
     {
       "type": "timeseries",
@@ -633,7 +683,7 @@
       "title": "Active discovered paths",
       "description": "Which candidates path discovery has promoted to active probing (value 1). Discovery keeps a path-diverse subset whose early hops differ, so the active set covers distinct routes rather than redundant ones. The set is re-evaluated every discovery interval.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 53 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -669,7 +719,7 @@
       "title": "Candidate distance (hops to reach)",
       "description": "Hop count to each discovery candidate. Discovery prefers shorter paths because fewer intervening hops means a spike localizes more precisely.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 53 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -703,7 +753,7 @@
       "title": "Diagnostic triggers",
       "description": "When a latency spike or packet loss is detected, a deeper diagnostic run fires (also marked as a red annotation across the dashboard). Bars show how many triggered, by target and reason.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 61 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -737,7 +787,7 @@
       "title": "Diagnostic probes: TCP handshake & DNS lookup time",
       "description": "Captured during a triggered diagnostic run. TCP handshake time exercises the real path independent of ICMP (many ISPs deprioritize pings), and DNS lookup time catches resolution problems that masquerade as general slowness.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 61 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 71 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -777,7 +827,7 @@
       "title": "AI latency diagnoses",
       "description": "Plain-language root-cause writeups produced by the Claude agent for each detected event (Event #N). Click an entry to jump to that moment on the dashboard. Requires ANTHROPIC_API_KEY to be set; otherwise this panel stays empty.",
       "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 69 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 79 },
       "options": {
         "onlyFromThisDashboard": false,
         "onlyInTimeRange": false,
@@ -794,7 +844,7 @@
       "title": "UDM config changes",
       "description": "Changes the udm-exporter detected in the gateway's WAN configuration (e.g. Smart Queues toggled, a rate limit changed). Click an entry to jump to when it happened, so you can see whether a config change helped or hurt latency. Secrets are redacted.",
       "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 78 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 88 },
       "options": {
         "onlyFromThisDashboard": false,
         "onlyInTimeRange": false,

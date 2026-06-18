@@ -1,4 +1,4 @@
-# Auto-provision the Prometheus datasource so the dashboard works on first boot.
+# Auto-provision datasources so the dashboard works on first boot.
 apiVersion: 1
 
 datasources:
@@ -10,3 +10,16 @@ datasources:
     uid: justrebootit-prometheus
     jsonData:
       timeInterval: 10s
+
+  # Used only by the "take a look" button: Grafana proxies the button's POST
+  # server-side to the prober, so the prober's HTTP port is never exposed to the
+  # host. allowedHosts locks this datasource to the prober alone, so an anonymous
+  # dashboard viewer can't turn it into a general-purpose request proxy (SSRF).
+  - name: JustRebootIt Prober
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    uid: justrebootit-prober
+    jsonData:
+      allowedHosts:
+        - http://prober:9430
+      tlsSkipVerify: true

@@ -131,6 +131,27 @@ type Diagnostics struct {
 	// optional and only activates when an API key is provided via the
 	// ANTHROPIC_API_KEY environment variable.
 	AI AIDiagnostics `yaml:"ai"`
+	// Manual configures the on-demand "take a look" investigation triggered from
+	// the dashboard button. See ManualInvestigation.
+	Manual ManualInvestigation `yaml:"manual"`
+}
+
+// ManualInvestigation controls the on-demand AI investigation a user triggers
+// from the dashboard (the "take a look" button), as opposed to the automatic,
+// anomaly-driven path. Because each run triggers an LLM call plus active probing
+// and the dashboard may be shared (anonymous viewing), it is rate-limited and
+// daily-capped. The limits are belt-and-suspenders when a local, zero-cost model
+// is configured via ANTHROPIC_BASE_URL.
+type ManualInvestigation struct {
+	// Enabled turns the on-demand endpoint on. When false, the button's request
+	// is rejected with 503. It still requires the AI feature to be enabled and an
+	// API key (or local base URL) to be present.
+	Enabled bool `yaml:"enabled"`
+	// MinInterval is the minimum time between manual investigations across all
+	// targets; a click within the window is rejected with 429. 0 = unlimited.
+	MinInterval time.Duration `yaml:"min_interval"`
+	// DailyCap bounds manual investigations per rolling 24h. 0 = unlimited.
+	DailyCap int `yaml:"daily_cap"`
 }
 
 // AIDiagnostics configures the optional Claude-driven analysis of an event.
@@ -224,6 +245,11 @@ func Default() Config {
 				ModelEval:       true,
 				ModelCheap:      "claude-sonnet-4-6",
 				EvalSamples:     3,
+			},
+			Manual: ManualInvestigation{
+				Enabled:     true,
+				MinInterval: 60 * time.Second,
+				DailyCap:    20,
 			},
 		},
 	}
