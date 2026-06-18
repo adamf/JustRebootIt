@@ -147,3 +147,15 @@ diagnostics:
     model_eval: true        # eval cheap vs expensive and lock in the good-enough one
     model_cheap: claude-sonnet-4-6  # used for far problems and classes where cheap suffices
     eval_samples: 3         # dual-model evals per class before deciding
+
+  # On-demand "take a look" investigation, triggered by the dashboard button
+  # (Grafana proxies the request to the prober server-side; no prober port is
+  # exposed). It runs the same agentic investigation as the automatic path but
+  # always investigates (no coalescing) and skips the cheap-vs-expensive eval.
+  # Because each run makes an LLM call + active probes and the dashboard may be
+  # shared, it is rate-limited. Tip: set ANTHROPIC_BASE_URL to a local,
+  # Anthropic-compatible model server for zero-cost investigations.
+  manual:
+    enabled: true
+    min_interval: 60s       # min time between manual runs (0 = unlimited)
+    daily_cap: 20           # max manual runs per 24h (0 = unlimited)

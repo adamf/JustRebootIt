@@ -13,14 +13,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -74,6 +77,7 @@ func main() {
 		analyzer, err := aidiag.New(aidiag.Config{
 			Enabled:        cfg.Diagnostics.AI.Enabled,
 			APIKey:         os.Getenv("ANTHROPIC_API_KEY"),
+			BaseURL:        os.Getenv("ANTHROPIC_BASE_URL"),
 			Model:          cfg.Diagnostics.AI.Model,
 			ModelCheap:     cfg.Diagnostics.AI.ModelCheap,
 			MaxIterations:  cfg.Diagnostics.AI.MaxIterations,
@@ -126,7 +130,7 @@ func main() {
 		}()
 	}
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: metricsHandler(reg)}
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: a.httpHandler(reg)}
 	go func() {
 		log.Printf("serving metrics on %s/metrics", cfg.ListenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -177,6 +181,37 @@ type app struct {
 	// reachHops is the last-known hop distance per target, fed by traceroutes
 	// and discovery, so an event can be classified near vs far.
 	reachHops map[string]int
+
+	// Manual-investigation rate limiting (the dashboard "take a look" button).
+	manualMu       sync.Mutex
+	manualLast     time.Time
+	manualDayStart time.Time
+	manualDayCount int
+}
+
+// allowManual reports whether a manual investigation may run now, enforcing the
+// configured global minimum interval and rolling daily cap (0 = unlimited). It
+// records the run on success, so callers must only proceed when it returns true.
+func (a *app) allowManual(now time.Time) bool {
+	cfg := a.cfg.Diagnostics.Manual
+	a.manualMu.Lock()
+	defer a.manualMu.Unlock()
+
+	if cfg.DailyCap > 0 {
+		if a.manualDayStart.IsZero() || now.Sub(a.manualDayStart) >= 24*time.Hour {
+			a.manualDayStart = now
+			a.manualDayCount = 0
+		}
+		if a.manualDayCount >= cfg.DailyCap {
+			return false
+		}
+	}
+	if cfg.MinInterval > 0 && !a.manualLast.IsZero() && now.Sub(a.manualLast) < cfg.MinInterval {
+		return false
+	}
+	a.manualLast = now
+	a.manualDayCount++
+	return true
 }
 
 func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
@@ -216,17 +251,93 @@ func traceHops(r tracer.Result) int {
 	return len(r.Hops)
 }
 
-func metricsHandler(reg *prometheus.Registry) http.Handler {
+func (a *app) httpHandler(reg *prometheus.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// On-demand AI investigation, triggered by the dashboard "take a look"
+	// button. Grafana proxies the request here server-side (via the Infinity
+	// datasource), so this endpoint stays on the internal network and is never
+	// exposed to the host.
+	mux.HandleFunc("/api/investigate", a.handleInvestigate)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("justrebootit prober\nsee /metrics\n"))
 	})
 	return mux
+}
+
+// handleInvestigate kicks off an on-demand AI investigation of a target. It is
+// the manual counterpart to the automatic anomaly path: it always investigates
+// (no coalescing) but is rate-limited because each run makes an LLM call and
+// runs active probes. The investigation is asynchronous; the writeup lands as a
+// Grafana annotation, so this returns 202 as soon as the job is queued.
+func (a *app) handleInvestigate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "use POST"})
+		return
+	}
+	if a.analyzer == nil || !a.cfg.Diagnostics.Manual.Enabled {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "manual AI investigation is not enabled"})
+		return
+	}
+	target := investigateTarget(r)
+	if target == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing target"})
+		return
+	}
+	if _, ok := a.lookup(target); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown target: " + target})
+		return
+	}
+	if !a.allowManual(time.Now()) {
+		a.m.AISuppressed("manual-throttled")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "rate limited; try again shortly"})
+		return
+	}
+
+	id := a.events.Add(1)
+	a.m.DiagTriggered(target, "manual")
+	a.m.SetEventID(target, id)
+	trig := diag.Trigger{EventID: id, Target: target, Reason: "manual"}
+	select {
+	case a.diagJobs <- trig:
+		log.Printf("manual investigation #%d %s queued", id, target)
+		writeJSON(w, http.StatusAccepted, map[string]any{"event_id": id, "target": target})
+	default:
+		// Undo the rate-limit charge would over-complicate; a full queue is rare
+		// and the next click will succeed once a worker drains it.
+		log.Printf("manual investigation #%d %s: queue full", id, target)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnostic queue full, try again"})
+	}
+}
+
+// investigateTarget extracts the target name from the request: a `target` query
+// parameter, a JSON body {"target":"..."}, or a form field, in that order.
+func investigateTarget(r *http.Request) string {
+	if t := r.URL.Query().Get("target"); t != "" {
+		return t
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Target string `json:"target"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(body.Target)
+	}
+	_ = r.ParseForm()
+	return strings.TrimSpace(r.FormValue("target"))
+}
+
+// writeJSON writes a JSON response with the given status code.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // startTarget launches the ping loop (and, if the target is trace-enabled, the
@@ -450,17 +561,26 @@ func (a *app) analyze(ev aidiag.Event) {
 		return
 	}
 
-	class := ev.Reason + "|" + ev.ScopeKind
-	plan := a.selector.Plan(class, ev.ScopeKind)
-
 	var res aidiag.Analysis
 	var err error
-	if plan.Eval {
-		res, err = a.evalModels(ev, class)
-	} else {
-		res, err = a.analyzer.Analyze(a.ctx, ev, plan.Model)
+	switch {
+	case ev.Reason == "manual":
+		// User-triggered: always investigate with the configured model and skip
+		// the cheap-vs-expensive evaluation (don't double-spend on a click).
+		res, err = a.analyzer.Analyze(a.ctx, ev, a.analyzer.ExpensiveModel())
 		if err == nil {
 			a.m.AIModelUsed(res.Model)
+		}
+	default:
+		class := ev.Reason + "|" + ev.ScopeKind
+		plan := a.selector.Plan(class, ev.ScopeKind)
+		if plan.Eval {
+			res, err = a.evalModels(ev, class)
+		} else {
+			res, err = a.analyzer.Analyze(a.ctx, ev, plan.Model)
+			if err == nil {
+				a.m.AIModelUsed(res.Model)
+			}
 		}
 	}
 	if err != nil {
@@ -477,19 +597,23 @@ func (a *app) analyze(ev aidiag.Event) {
 	if a.coalescer != nil && ev.Signature != "" {
 		a.coalescer.Record(ev.Signature, res)
 	}
-	log.Printf("ai diagnosis #%d %s [%s, scope=%s, model=%s]: %s",
-		ev.ID, ev.Target, plan.Model, ev.ScopeKind, res.Model, res.Headline)
+	log.Printf("ai diagnosis #%d %s [reason=%s, scope=%s, model=%s]: %s",
+		ev.ID, ev.Target, ev.Reason, ev.ScopeKind, res.Model, res.Headline)
 
 	annCtx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
+	tags := []string{
+		"justrebootit", "ai-diagnosis",
+		fmt.Sprintf("event:%d", ev.ID),
+		"target:" + ev.Target,
+		"reason:" + ev.Reason,
+	}
+	if ev.Reason == "manual" {
+		tags = append(tags, "manual")
+	}
 	ann := grafana.Annotation{
 		Time: ev.When,
-		Tags: []string{
-			"justrebootit", "ai-diagnosis",
-			fmt.Sprintf("event:%d", ev.ID),
-			"target:" + ev.Target,
-			"reason:" + ev.Reason,
-		},
+		Tags: tags,
 		Text: fmt.Sprintf("**Event #%d — %s** (target %s)\n\n%s",
 			ev.ID, res.Headline, ev.Target, res.Text),
 	}

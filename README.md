@@ -279,6 +279,11 @@ Two things to know before enabling it:
 - **It costs per investigation.** Opus is the default for best diagnosis; switch
   `model` to `claude-sonnet-4-6` to cut cost.
 
+**Use a local model (no cost, no data leaves your network).** Point the agent at
+any Anthropic-compatible endpoint by setting `ANTHROPIC_BASE_URL` in `.env` (e.g.
+a local LLM proxy on your LAN). With it set, no `ANTHROPIC_API_KEY` is required
+and investigations cost nothing. Leave it blank to use the hosted Anthropic API.
+
 **Cost control — investigations are coalesced.** A single shared incident (e.g.
 bufferbloat) spikes *every* target at once, which would otherwise launch dozens
 of identical investigations. To prevent that, each event gets a cheap
@@ -314,6 +319,40 @@ the knobs under `diagnostics.ai` in `config/targets.yml`.
 The agent posts annotations using the Grafana admin account
 (`GRAFANA_ADMIN_PASSWORD` from `.env`) over the internal Docker network; no
 ports are exposed for this.
+
+### On-demand investigation — the "take a look" button
+
+The AI analysis above fires automatically on anomalies. You can also trigger it
+yourself: the **"Ask the AI to take a look"** panel (in the "$target" detail row)
+runs the same agentic investigation **on demand** for the currently selected
+target, then posts its writeup as an annotation just like an automatic event.
+Unlike the automatic path it always investigates (no coalescing) and skips the
+cheap-vs-expensive eval, so you get a full answer to *"how am I doing versus
+baseline right now?"*. The writeup appears on the timeline and in the "AI latency
+diagnoses" panel ~30–90s after you click (not in the button panel itself).
+
+It needs no exposed prober port: the button (a **Business Forms** panel) sends
+its request through the **Infinity** datasource, which Grafana proxies
+**server-side** to the prober over the internal network. The Infinity datasource
+is locked to the prober host only (`allowedHosts`), so an anonymous dashboard
+viewer can't turn it into a general request proxy. Both plugins install
+automatically via `GF_INSTALL_PLUGINS` in `docker-compose.yml`.
+
+Because each click makes an LLM call and runs active probes — and the dashboard
+allows anonymous viewing — manual runs are **rate-limited**:
+
+```yaml
+diagnostics:
+  manual:
+    enabled: true
+    min_interval: 60s   # min time between manual runs (0 = unlimited)
+    daily_cap: 20       # max manual runs per 24h (0 = unlimited)
+```
+
+Throttled clicks return `429` and are counted in
+`diagnostic_ai_suppressed_total{reason="manual-throttled"}`. With a local model
+(`ANTHROPIC_BASE_URL`, above) there's no per-click cost and the limits are just a
+safety net.
 
 ### Secrets / Grafana — `.env`
 
@@ -392,7 +431,7 @@ Prober (`:9430/metrics`):
 | `diagnostic_dns_lookup_seconds{target}` / `_up` | DNS resolution time / success from the last run |
 | `diagnostic_event_id{target}` | id of the most recent event (maps annotation ↔ run) |
 | `diagnostic_ai_analyzed_total{target}` / `diagnostic_ai_failed_total{target}` | AI analyses completed / failed |
-| `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget) |
+| `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget/manual-throttled) |
 | `diagnostic_ai_model_used_total{model}` | investigations by the model that produced the analysis |
 | `diagnostic_ai_eval_runs_total` | dual-model evaluation runs (cheap vs expensive + judge) |
 

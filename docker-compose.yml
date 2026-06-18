@@ -25,6 +25,11 @@ services:
       # disable it entirely (everything else still works). The prober reads
       # Prometheus and posts Grafana annotations over the internal network.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: point the AI at a local, Anthropic-compatible model server
+      # (e.g. an LLM proxy) to run investigations at zero per-request cost. Leave
+      # empty to use the hosted Anthropic API. With this set, an API key is not
+      # required.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       JRI_PROMETHEUS_URL: http://prometheus:9090
       # Lets the AI read the gateway's current WAN config (Smart Queues, etc.)
       # so it doesn't recommend changes you've already made.
@@ -77,6 +82,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_DEFAULT_THEME: dark
+      # The "take a look" button (Business Forms panel) submits through the
+      # Infinity datasource, which proxies the request server-side to the prober —
+      # so the prober port stays internal. Both plugins install on startup.
+      GF_INSTALL_PLUGINS: ${GRAFANA_INSTALL_PLUGINS:-volkovlabs-form-panel,yesoreyeram-infinity-datasource}
       # Zero-click: anonymous viewing is on and the login form is hidden, so
       # opening http://localhost:3000 lands straight on the dashboard with no
       # prompt. It also makes the dashboard shareable with an ISP engineer via a

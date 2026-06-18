@@ -43,6 +43,9 @@ Output format (plain text, no markdown headers):
 
 // userPrompt renders the specific event as the agent's opening context.
 func userPrompt(ev Event) string {
+	if ev.Reason == "manual" {
+		return manualPrompt(ev)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Investigate diagnostic event #%d.\n\n", ev.ID)
 	fmt.Fprintf(&b, "Detected at: %s (UTC)\n", ev.When.UTC().Format(time.RFC3339))
@@ -69,6 +72,35 @@ func userPrompt(ev Event) string {
 	}
 
 	b.WriteString("\nUse the time around the detection timestamp to query the monitoring data, then explain what most likely happened.")
+	return b.String()
+}
+
+// manualPrompt frames a user-requested "take a look" health check. Unlike the
+// automatic path, there is no specific anomaly to explain: the user wants to
+// know how the connection is doing RIGHT NOW versus its normal baseline, so the
+// agent must pull current and recent stats itself rather than diagnose a spike.
+func manualPrompt(ev Event) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "On-demand health check #%d, requested by the user from the dashboard.\n\n", ev.ID)
+	fmt.Fprintf(&b, "Requested at: %s (UTC)\n", ev.When.UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Focus target: %s (host %s, group %s) — but assess the connection as a whole.\n\n", ev.Target, ev.Host, ev.Group)
+
+	b.WriteString("There is no specific alert firing. The user wants an assessment of how the connection is performing right now compared with its normal baseline. Query the monitoring data to judge this: compare each target's recent latency (probe_rtt_median_seconds and the percentiles) and loss against its typical level over the past several hours, check whether any single hop or target stands out, and look at the gateway/WAN signals if present.\n\n")
+
+	b.WriteString("Mechanical diagnostics just run for the focus target:\n")
+	b.WriteString(formatTrace(ev.Trace))
+	if ev.TCPOK {
+		fmt.Fprintf(&b, "- TCP handshake to the target: %s\n", ev.TCPConnect.Round(time.Millisecond))
+	} else {
+		b.WriteString("- TCP handshake to the target: FAILED\n")
+	}
+	if ev.DNSOK {
+		fmt.Fprintf(&b, "- DNS resolution probe: %s\n", ev.DNSLookup.Round(time.Millisecond))
+	} else {
+		b.WriteString("- DNS resolution probe: FAILED\n")
+	}
+
+	b.WriteString("\nGive a clear verdict on whether things look normal or degraded versus baseline, and if degraded, where the problem most likely is.")
 	return b.String()
 }
 
