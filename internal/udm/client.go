@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,10 @@ func (f *FlexFloat) UnmarshalJSON(b []byte) error {
 		if err := json.Unmarshal(b, &s); err != nil {
 			return err
 		}
+		// UniFi pads some string-encoded numbers with surrounding whitespace
+		// (e.g. system-stats cpu/mem come back as " 80.2"), which ParseFloat
+		// rejects; trim before parsing and treat all-whitespace as zero.
+		s = strings.TrimSpace(s)
 		if s == "" {
 			*f = 0
 			return nil

@@ -15,6 +15,9 @@ func TestFlexFloatUnmarshal(t *testing.T) {
 		{"integer", `42`, 42},
 		{"quoted-number", `"3.14"`, 3.14},
 		{"quoted-integer", `"100"`, 100},
+		{"quoted-leading-space", `" 80.2"`, 80.2},
+		{"quoted-surrounding-space", `"  43.5 "`, 43.5},
+		{"whitespace-only", `"   "`, 0},
 		{"null", `null`, 0},
 		{"empty-string", `""`, 0},
 	}
