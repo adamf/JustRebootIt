@@ -202,8 +202,8 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 	}
 	return Analysis{
 		EventID:  ev.ID,
-		Headline: firstLine(text),
-		Text:     text,
+		Headline: headline(text),
+		Text:     stripMarkdown(text),
 		Model:    model,
 	}, nil
 }
@@ -241,15 +241,67 @@ func (a *Analyzer) Judge(ctx context.Context, expensive, cheap Analysis) (bool, 
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(out.String())), "yes"), nil
 }
 
-// firstLine returns the first non-empty line, stripped of a leading markdown
-// heading marker, for use as a compact annotation title.
-func firstLine(s string) string {
+// stripMarkdown converts the model's output to clean plain text, because
+// Grafana annotations (and the annotation-list panel) render as plain text — so
+// Markdown like **bold**, `code`, headings, and --- rules would otherwise show
+// up as literal noise.
+func stripMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "__", "")
+	s = strings.ReplaceAll(s, "`", "")
+	out := make([]string, 0, 16)
 	for _, line := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(line)
+		if isRule(t) { // drop horizontal rules like --- or ***
+			continue
+		}
+		// Strip a leading heading/quote/bullet marker but keep the content.
+		t = strings.TrimLeft(t, "#> ")
+		out = append(out, t)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// headline picks a compact, plain-text title: the first substantive line,
+// skipping Markdown rules, blank lines, and filler preambles like "Here is the
+// diagnosis:" so the dashboard title is the actual root cause.
+func headline(s string) string {
+	for _, line := range strings.Split(stripMarkdown(s), "\n") {
 		line = strings.TrimSpace(line)
-		line = strings.TrimLeft(line, "# ")
-		if line != "" {
-			return line
+		if line == "" || isPreamble(line) {
+			continue
+		}
+		return line
+	}
+	return strings.TrimSpace(stripMarkdown(s))
+}
+
+// isRule reports whether a line is a Markdown horizontal rule.
+func isRule(t string) bool {
+	if len(t) < 3 {
+		return false
+	}
+	for _, r := range t {
+		if r != '-' && r != '*' && r != '_' && r != '=' {
+			return false
 		}
 	}
-	return s
+	return true
+}
+
+// isPreamble reports whether a line is filler that shouldn't be the headline.
+func isPreamble(line string) bool {
+	if strings.HasSuffix(line, ":") {
+		return true
+	}
+	l := strings.ToLower(line)
+	for _, p := range []string{
+		"here is", "here's", "the picture is", "summary", "in summary",
+		"full diagnosis", "based on", "to summarize", "diagnosis:", "analysis:",
+	} {
+		if strings.HasPrefix(l, p) {
+			return true
+		}
+	}
+	return false
 }

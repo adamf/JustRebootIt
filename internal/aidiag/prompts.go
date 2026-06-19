@@ -35,11 +35,11 @@ Reasoning guidance:
 
 Keep tool use focused — a handful of well-chosen queries, not dozens.
 
-Output format (plain text, no markdown headers):
-- FIRST LINE: a single concise sentence naming the most likely cause and where it is (this becomes the dashboard headline).
+Output format — the dashboard renders your answer as PLAIN TEXT, so do NOT use any Markdown: no **bold**, no *italics*, no # headings, no --- horizontal rules, no backticks, no bullet syntax. Write plain sentences only.
+- Begin IMMEDIATELY with the one-sentence root cause and where it is — no preamble like "Here is the diagnosis" or "The picture is complete". This first sentence becomes the dashboard headline, so make it stand on its own.
 - Then 2-5 short sentences of supporting evidence drawn from the tools.
-- Then "Confidence: low|medium|high".
-- Then "Recommended action:" with one practical next step (e.g. what to show the ISP, or a local fix like enabling Smart Queues).`
+- Then a line "Confidence: low|medium|high".
+- Then a line "Recommended action:" with one practical next step (e.g. what to show the ISP, or a local fix like enabling Smart Queues).`
 
 // userPrompt renders the specific event as the agent's opening context.
 func userPrompt(ev Event) string {

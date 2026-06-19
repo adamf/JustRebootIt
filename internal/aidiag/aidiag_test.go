@@ -58,7 +58,7 @@ func TestManualPromptIsHealthCheck(t *testing.T) {
 	}
 }
 
-func TestFirstLine(t *testing.T) {
+func TestHeadline(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
@@ -66,11 +66,28 @@ func TestFirstLine(t *testing.T) {
 		{"# Heading\nbody", "Heading"},
 		{"\n\n  Leading blanks then text", "Leading blanks then text"},
 		{"single", "single"},
+		// Markdown bold and a preamble first line are skipped/stripped.
+		{"The picture is complete. Here is the full diagnosis:\n\n---\n\n**Transient ICMP deprioritization at hop 7.** More.",
+			"Transient ICMP deprioritization at hop 7. More."},
+		{"Here is the diagnosis:\nBufferbloat on the WAN uplink.", "Bufferbloat on the WAN uplink."},
 	}
 	for _, tc := range tests {
-		if got := firstLine(tc.in); got != tc.want {
-			t.Errorf("firstLine(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := headline(tc.in); got != tc.want {
+			t.Errorf("headline(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestStripMarkdown(t *testing.T) {
+	in := "**Bold** and `code` and __also__.\n\n---\n\n# Heading\n> quote"
+	got := stripMarkdown(in)
+	for _, bad := range []string{"**", "`", "__", "---", "#", ">"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("stripMarkdown left %q in output:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "Bold and code and also.") {
+		t.Errorf("stripMarkdown mangled content:\n%s", got)
 	}
 }
 

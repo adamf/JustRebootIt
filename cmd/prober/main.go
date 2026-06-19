@@ -614,7 +614,7 @@ func (a *app) analyze(ev aidiag.Event) {
 	ann := grafana.Annotation{
 		Time: ev.When,
 		Tags: tags,
-		Text: fmt.Sprintf("**Event #%d — %s** (target %s)\n\n%s",
+		Text: fmt.Sprintf("Event #%d — %s (target %s)\n\n%s",
 			ev.ID, res.Headline, ev.Target, res.Text),
 	}
 	if err := a.grafana.Post(annCtx, ann); err != nil {

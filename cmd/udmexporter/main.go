@@ -128,7 +128,7 @@ func watchConfig(ctx context.Context, client *udm.Client, gfx *grafana.Client, c
 		}
 		changes.Add(float64(len(diff)))
 		log.Printf("udm config changed (%d): %v", len(diff), diff)
-		text := "**UDM WAN configuration changed**\n\n- " + joinLines(diff)
+		text := "UDM WAN configuration changed:\n- " + joinLines(diff)
 		actx, acancel := context.WithTimeout(ctx, 10*time.Second)
 		defer acancel()
 		if err := gfx.Post(actx, grafana.Annotation{
