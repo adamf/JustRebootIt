@@ -169,7 +169,28 @@ privileged: true       # raw ICMP sockets (see Network permissions)
 trace_interval: 60s    # traceroutes are heavier; run them less often
 trace_max_hops: 30
 trace_timeout: 2s
+jitter_pings: 60       # pings/cycle for `jitter: true` targets (high-rate profile)
+jitter_interval: 5s    # cycle length for those targets (≈12 probes/sec)
 ```
+
+### Debugging video stutter (jitter profile)
+
+Video stutter is rarely about *average* latency — it's **jitter** (variance) and
+brief **micro-loss**, often sub-second. The default 20-pings-per-10s sampling
+smooths that away. Mark the streaming server / CDN IPs that stutter with
+**`jitter: true`** and they're probed at the high rate set by `jitter_pings` /
+`jitter_interval` (default ~12 probes/sec) instead:
+
+```yaml
+  - { name: stream-cdn-1, host: 203.0.113.40, group: streaming, trace: true, jitter: true }
+```
+
+Then, in the **Smoke (per target)** panel, a wide best→worst band with a flat
+median is your stutter signature; check **packet loss** and the **per-hop
+traceroute** for the same target, and compare against `home-gateway` to tell a
+flaky path/CDN from a local problem. Two caveats: stutter on the **Wi-Fi/LAN**
+side (device→gateway) won't show here — run `mtr` from the streaming device too
+— and if jitter tracks WAN saturation it's bufferbloat (enable Smart Queues).
 
 ### Path discovery — diverse, short routes (automatic)
 

@@ -374,19 +374,25 @@ func (a *app) lookup(name string) (config.Target, bool) {
 // pingLoop probes one target once per cycle until ctx is cancelled, publishing
 // the per-cycle statistics and feeding the anomaly detector.
 func (a *app) pingLoop(ctx context.Context, t config.Target) {
-	p := pinger.New(t.Host, a.cfg.Pings, a.cfg.Timeout, a.cfg.Privileged)
+	// Jitter-profile targets are probed at a higher rate so brief stutter shows
+	// up; everything else uses the normal cadence.
+	pings, interval := a.cfg.ProbePlan(t)
+	if t.Jitter {
+		log.Printf("target %s: jitter profile (%d pings / %s)", t.Name, pings, interval)
+	}
+	p := pinger.New(t.Host, pings, a.cfg.Timeout, a.cfg.Privileged)
 
-	ticker := time.NewTicker(a.cfg.Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		res := p.Run(ctx, a.cfg.Interval)
+		res := p.Run(ctx, interval)
 		if res.Err != nil {
 			// A hard error (e.g. unresolvable host) — record down with full
 			// loss and keep trying; transient DNS or routing failures often
 			// recover. Reporting loss=1 (rather than 0) keeps the loss panel
 			// honest while probe_up=0 flags the underlying failure.
 			log.Printf("ping %s (%s): %v", t.Name, t.Host, res.Err)
-			res = pinger.Result{Sent: a.cfg.Pings, Loss: 1}
+			res = pinger.Result{Sent: pings, Loss: 1}
 		}
 		a.m.ObserveProbe(t.Name, t.Group, res)
 		a.maybeDiagnose(t, res)

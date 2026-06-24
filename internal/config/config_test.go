@@ -81,3 +81,38 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestProbePlanJitter(t *testing.T) {
+	cfg := Default() // Pings=20, Interval=10s, JitterPings=60, JitterInterval=5s
+	normal := Target{Name: "n"}
+	if p, iv := cfg.ProbePlan(normal); p != cfg.Pings || iv != cfg.Interval {
+		t.Errorf("normal target = (%d,%s), want (%d,%s)", p, iv, cfg.Pings, cfg.Interval)
+	}
+
+	jit := Target{Name: "j", Jitter: true}
+	if p, iv := cfg.ProbePlan(jit); p != 60 || iv != 5*time.Second {
+		t.Errorf("jitter target = (%d,%s), want (60,5s)", p, iv)
+	}
+
+	// JitterPings<=0 disables the profile: jitter targets fall back to normal.
+	cfg.JitterPings = 0
+	if p, iv := cfg.ProbePlan(jit); p != cfg.Pings || iv != cfg.Interval {
+		t.Errorf("disabled profile = (%d,%s), want (%d,%s)", p, iv, cfg.Pings, cfg.Interval)
+	}
+
+	// JitterInterval<=0 reuses the global interval.
+	cfg = Default()
+	cfg.JitterInterval = 0
+	if _, iv := cfg.ProbePlan(jit); iv != cfg.Interval {
+		t.Errorf("zero jitter_interval should reuse global interval, got %s", iv)
+	}
+}
+
+func TestValidateJitterTimeout(t *testing.T) {
+	cfg := Default()
+	cfg.Timeout = 6 * time.Second // >= jitter_interval (5s)
+	cfg.Targets = []Target{{Name: "a", Host: "h"}}
+	if err := cfg.Validate(); err == nil {
+		t.Error("timeout >= jitter_interval should be rejected")
+	}
+}

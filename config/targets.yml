@@ -15,6 +15,14 @@ timeout: 2s
 # Raw ICMP sockets (needs NET_RAW, granted in docker-compose.yml).
 privileged: true
 
+# High-rate "jitter profile" for targets with `jitter: true`. The normal 20
+# pings / 10s smooths over the sub-second jitter and micro-loss behind video
+# stutter; this packs many pings into a short cycle (60 / 5s ≈ one every ~83ms)
+# so that shows up in the smoke band and percentiles. Raise jitter_pings (and/or
+# lower jitter_interval) for finer resolution at the cost of more traffic.
+jitter_pings: 60
+jitter_interval: 5s
+
 # Traceroutes are heavier and the path changes slowly, so run them less often.
 trace_interval: 60s
 trace_max_hops: 30
@@ -79,6 +87,19 @@ targets:
     host: www.cloudflare.com
     group: content
     trace: false
+
+  # --- Video-stutter debugging ---------------------------------------------
+  # Add the streaming server / CDN IPs that stutter here with jitter: true to
+  # probe them at the high rate (jitter_pings/jitter_interval above). Then watch
+  # the per-target "smoke" band (best->worst spread = jitter) and packet loss;
+  # compare against home-gateway to tell a flaky path/CDN from a local problem.
+  # Tip: stutter on the LAN/Wi-Fi side won't show here — run mtr from the actual
+  # streaming device too.
+  # - name: stream-cdn-1
+  #   host: 203.0.113.40
+  #   group: streaming
+  #   trace: true
+  #   jitter: true
 
 # --- Path discovery ----------------------------------------------------------
 # Probing many destinations that share the same first few hops is redundant: a

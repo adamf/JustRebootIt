@@ -25,6 +25,11 @@ type Target struct {
 	// Trace enables traceroutes to this target. Tracing every target every
 	// cycle is noisy; enable it for a representative subset.
 	Trace bool `yaml:"trace"`
+	// Jitter opts this target into the high-rate jitter profile (many closely
+	// spaced pings per cycle) so brief, sub-second stutter — the kind that
+	// wrecks video streaming — shows up in the smoke band and percentiles.
+	// Uses the jitter_pings / jitter_interval knobs below.
+	Jitter bool `yaml:"jitter"`
 }
 
 // Config is the top-level prober configuration.
@@ -44,6 +49,15 @@ type Config struct {
 	// unprivileged datagram ICMP when false. Raw sockets are the most
 	// portable inside a container that has been granted NET_RAW.
 	Privileged bool `yaml:"privileged"`
+
+	// JitterPings and JitterInterval define the high-rate profile used for
+	// targets with jitter: true. Many pings packed into a short cycle (e.g. 60
+	// over 5s ≈ one every ~83ms) resolve the sub-second jitter and micro-loss
+	// behind video stutter, which the default 20-per-10s sampling smooths over.
+	// JitterPings <= 0 disables the profile (jitter targets fall back to the
+	// normal Pings/Interval); JitterInterval <= 0 reuses the global Interval.
+	JitterPings    int           `yaml:"jitter_pings"`
+	JitterInterval time.Duration `yaml:"jitter_interval"`
 
 	// TraceInterval is how often traceroutes run for trace-enabled targets.
 	// Traceroutes are heavier and the path changes slowly, so this is usually
@@ -214,6 +228,10 @@ func Default() Config {
 		TraceMaxHops:  30,
 		TraceTimeout:  2 * time.Second,
 		ListenAddr:    ":9430",
+		// ~12 probes/sec for jitter targets — enough to catch streaming stutter
+		// without much traffic. Tune higher for finer resolution.
+		JitterPings:    60,
+		JitterInterval: 5 * time.Second,
 		Discovery: Discovery{
 			Enabled:      true,
 			Interval:     15 * time.Minute,
@@ -338,5 +356,24 @@ func (c Config) Validate() error {
 			return fmt.Errorf("diagnostics.workers must be >= 1, got %d", c.Diagnostics.Workers)
 		}
 	}
+	// The jitter cycle, like the normal one, must leave room for the per-reply
+	// timeout.
+	if c.JitterPings > 0 && c.JitterInterval > 0 && c.Timeout >= c.JitterInterval {
+		return fmt.Errorf("timeout (%s) must be smaller than jitter_interval (%s)", c.Timeout, c.JitterInterval)
+	}
 	return nil
+}
+
+// ProbePlan returns the pings-per-cycle and cycle length to use for a target.
+// Jitter targets use the high-rate profile (when configured); everything else
+// uses the normal cadence.
+func (c Config) ProbePlan(t Target) (pings int, interval time.Duration) {
+	if t.Jitter && c.JitterPings > 0 {
+		iv := c.Interval
+		if c.JitterInterval > 0 {
+			iv = c.JitterInterval
+		}
+		return c.JitterPings, iv
+	}
+	return c.Pings, c.Interval
 }
