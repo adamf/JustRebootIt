@@ -232,6 +232,60 @@ diagnostics:
 Every trigger also drops a **red annotation** across the whole dashboard, so you
 can line up exactly when deeper tests fired against the latency and WAN graphs.
 
+### Latency under load — the bufferbloat / streaming-stutter probe (optional)
+
+A normal ping measures the link while it is **idle** — which is exactly when
+bufferbloat is invisible. Streaming stutter (Plex, video calls, cloud gaming)
+happens only while the link is **saturated**: a bulk transfer fills an oversized
+buffer, every other packet queues behind it, and round-trip time jumps from a
+few milliseconds to hundreds. A quiet-link ping sails right past it.
+
+The `underload:` block recreates that condition on purpose. It briefly
+saturates the link with a controlled transfer while pinging a stable host, then
+publishes the **idle-vs-loaded RTT difference — the bufferbloat — as a metric**
+you can graph over time ("every Plex session, the uplink hit 90% and RTT to the
+client tripled"). The increase is graded on the same A–F scale the
+Waveform/DSLReports bufferbloat tests use, and a bad grade also drops a
+dashboard annotation.
+
+It moves **real data**, so it is **off by default** and bounded by a byte
+ceiling and a short duration per run. Pick the direction that matches your
+problem:
+
+- **`up`** — saturate the uplink. The usual culprit for a Plex **server**
+  pushing video (residential cable uplinks buffer the worst), or any
+  upload-heavy stutter.
+- **`down`** — saturate the downlink. For a Plex **client** / download-heavy
+  stutter.
+- **`both`** — measure each direction in turn.
+
+```yaml
+underload:
+  enabled: false       # opt-in: this generates real traffic
+  interval: 15m        # how often to run a loaded-latency test
+  target: uplink       # metric label (independent of the targets list)
+  host: 1.1.1.1        # pinged under load; a near anchor isolates YOUR link
+  direction: up        # up | down | both
+  duration: 12s        # how long to hold the link under load per direction
+  streams: 4           # parallel transfer connections (enough to saturate)
+  bytes: 250000000     # ceiling on data moved per direction per run (~250MB)
+  pings: 20            # RTT samples in each of the idle and loaded phases
+  timeout: 2s
+  bad_increase: 60ms   # annotate when loaded RTT rises >= this (0 = never)
+  down_url: https://speed.cloudflare.com/__down  # defaults: Cloudflare's
+  up_url:   https://speed.cloudflare.com/__up     # public speed-test endpoints
+```
+
+The fix for a bad grade is almost always **SQM / Smart Queues** (cake or
+fq_codel) on the offending end — it caps the link slightly below line rate to
+keep the queue short — **not** a faster plan. Point `host` at a near anchor (or
+your gateway) to measure *your own* access link's queue; point it at the
+stream's far end to measure that whole path. Published metrics:
+`underload_rtt_idle_seconds`, `underload_rtt_loaded_seconds`,
+`underload_rtt_increase_seconds`, `underload_bufferbloat_ratio`,
+`underload_throughput_bits_per_second`, and `underload_loaded_loss_ratio`
+(all labelled by `target` and `direction`).
+
 ### AI root-cause analysis — "why did this happen?" (optional)
 
 The mechanical diagnostics gather raw signal; this turns it into an explanation.
@@ -434,6 +488,11 @@ Prober (`:9430/metrics`):
 | `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget/manual-throttled) |
 | `diagnostic_ai_model_used_total{model}` | investigations by the model that produced the analysis |
 | `diagnostic_ai_eval_runs_total` | dual-model evaluation runs (cheap vs expensive + judge) |
+| `underload_rtt_idle_seconds{target,direction}` / `_loaded_seconds` | median RTT idle vs under load, last latency-under-load run |
+| `underload_rtt_increase_seconds{target,direction}` | loaded − idle median RTT (the bufferbloat) |
+| `underload_bufferbloat_ratio{target,direction}` | loaded median RTT as a multiple of idle |
+| `underload_throughput_bits_per_second{target,direction}` | throughput achieved while saturating the link |
+| `underload_loaded_loss_ratio{target,direction}` | packet loss to the host while the link was saturated |
 
 UDM exporter (`:9431/metrics`): `udm_up`, `udm_wan_latency_ms`,
 `udm_wan_rx_bytes_per_second`, `udm_wan_tx_bytes_per_second`, `udm_wan_drops`,

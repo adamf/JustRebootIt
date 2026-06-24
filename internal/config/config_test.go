@@ -59,6 +59,51 @@ targets:
 	}
 }
 
+// TestShippedConfigLoads guards the committed config/targets.yml against drift:
+// it must parse and validate with the real defaults.
+func TestShippedConfigLoads(t *testing.T) {
+	if _, err := Load(filepath.Join("..", "..", "config", "targets.yml")); err != nil {
+		t.Fatalf("shipped config/targets.yml failed to load: %v", err)
+	}
+}
+
+func baseUnderload() Config {
+	c := Default()
+	c.Targets = []Target{{Name: "a", Host: "h"}}
+	c.Underload.Enabled = true
+	c.Underload.Target = "uplink"
+	c.Underload.Host = "1.1.1.1"
+	return c
+}
+
+func TestValidateUnderload(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+	}{
+		{"valid defaults", func(c *Config) {}, false},
+		{"missing host", func(c *Config) { c.Underload.Host = "" }, true},
+		{"missing target label", func(c *Config) { c.Underload.Target = "" }, true},
+		{"bad direction", func(c *Config) { c.Underload.Direction = "sideways" }, true},
+		{"zero streams", func(c *Config) { c.Underload.Streams = 0 }, true},
+		{"timeout too large for duration", func(c *Config) { c.Underload.Timeout = 10 * time.Second }, true},
+		{"up needs up_url", func(c *Config) { c.Underload.Direction = "up"; c.Underload.UpURL = "" }, true},
+		{"down needs down_url", func(c *Config) { c.Underload.DownURL = "" }, true},
+		{"disabled skips checks", func(c *Config) { c.Underload.Enabled = false; c.Underload.Host = "" }, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := baseUnderload()
+			tc.mutate(&c)
+			err := c.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string

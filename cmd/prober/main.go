@@ -37,6 +37,7 @@ import (
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
+	"github.com/adamf/justrebootit/internal/underload"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -118,6 +119,16 @@ func main() {
 	// Always-on targets run for the whole lifetime.
 	for _, t := range cfg.Targets {
 		a.startTarget(t)
+	}
+
+	// Latency-under-load (bufferbloat) probe. Opt-in: it moves real data, so it
+	// only runs when explicitly enabled in the config.
+	if cfg.Underload.Enabled {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.runUnderload(ctx)
+		}()
 	}
 
 	// Path discovery promotes a diverse subset of the candidate pool. With no
@@ -757,6 +768,85 @@ func (a *app) reconcileDiscovered(selected []discovery.PathInfo) {
 			defer a.wg.Done()
 			a.traceLoop(tctx, t)
 		}(t)
+	}
+}
+
+// runUnderload periodically measures latency-under-load (bufferbloat): it
+// saturates the link with a controlled transfer while pinging a stable host,
+// and publishes the idle-vs-loaded RTT difference. The first run happens
+// immediately so the dashboard has a reading at startup. A run with a bad
+// bufferbloat grade posts a Grafana annotation so it shows up on the timeline.
+func (a *app) runUnderload(ctx context.Context) {
+	uc := a.cfg.Underload
+	prober := underload.New(underload.Config{
+		Host:       uc.Host,
+		Direction:  uc.Direction,
+		Duration:   uc.Duration,
+		Streams:    uc.Streams,
+		DownURL:    uc.DownURL,
+		UpURL:      uc.UpURL,
+		Bytes:      uc.Bytes,
+		Pings:      uc.Pings,
+		Timeout:    uc.Timeout,
+		Privileged: a.cfg.Privileged,
+	})
+	// Annotations are best-effort and independent of the AI feature, so build a
+	// client here (nil when Grafana credentials aren't set — Post is a no-op).
+	gc := grafana.New(
+		env("GRAFANA_URL", "http://grafana:3000"),
+		env("GRAFANA_USER", "admin"),
+		os.Getenv("GRAFANA_ADMIN_PASSWORD"),
+	)
+
+	log.Printf("latency-under-load probe enabled (target=%s host=%s direction=%s every %s)",
+		uc.Target, uc.Host, uc.Direction, uc.Interval)
+
+	run := func() {
+		res := prober.Run(ctx)
+		for _, ph := range res.Phases {
+			a.m.ObserveUnderload(uc.Target, ph)
+			inc := ph.Increase()
+			log.Printf("underload %s/%s: idle=%s loaded=%s (+%s, %.1fx, grade %s) throughput=%.1f Mbps loss=%.0f%%",
+				uc.Target, ph.Direction, ph.Idle.Median.Round(time.Millisecond),
+				ph.Loaded.Median.Round(time.Millisecond), inc.Round(time.Millisecond),
+				ph.Ratio(), underload.Grade(inc), ph.Bps/1e6, ph.Loaded.Loss*100)
+
+			if uc.BadIncrease > 0 && inc >= uc.BadIncrease && ph.Idle.Recv > 0 && ph.Loaded.Recv > 0 {
+				a.annotateUnderload(ctx, gc, uc.Target, ph)
+			}
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(uc.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
+// annotateUnderload posts a Grafana annotation for a bufferbloat-grade
+// latency-under-load result, so the spike-under-load is visible on the timeline
+// next to the latency graphs.
+func (a *app) annotateUnderload(ctx context.Context, gc *grafana.Client, target string, ph underload.Phase) {
+	inc := ph.Increase()
+	annCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ann := grafana.Annotation{
+		Time: time.Now(),
+		Tags: []string{"justrebootit", "underload", "bufferbloat", "target:" + target, "direction:" + ph.Direction},
+		Text: fmt.Sprintf("Bufferbloat grade %s on %s (%s): latency rose from %s idle to %s under load (+%s) while pushing %.0f Mbps. The link buffers under load — enable SQM/Smart Queues on this end to keep the queue short.",
+			underload.Grade(inc), target, ph.Direction,
+			ph.Idle.Median.Round(time.Millisecond), ph.Loaded.Median.Round(time.Millisecond),
+			inc.Round(time.Millisecond), ph.Bps/1e6),
+	}
+	if err := gc.Post(annCtx, ann); err != nil {
+		log.Printf("underload %s/%s: posting annotation: %v", target, ph.Direction, err)
 	}
 }
 

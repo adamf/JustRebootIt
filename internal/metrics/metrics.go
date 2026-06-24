@@ -11,6 +11,7 @@ import (
 	"github.com/adamf/justrebootit/internal/discovery"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
+	"github.com/adamf/justrebootit/internal/underload"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -48,6 +49,13 @@ type Metrics struct {
 	aiSuppressed   *prometheus.CounterVec
 	aiModelUsed    *prometheus.CounterVec
 	aiEvalRuns     prometheus.Counter
+
+	ulIdle       *prometheus.GaugeVec
+	ulLoaded     *prometheus.GaugeVec
+	ulIncrease   *prometheus.GaugeVec
+	ulRatio      *prometheus.GaugeVec
+	ulThroughput *prometheus.GaugeVec
+	ulLoss       *prometheus.GaugeVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -169,6 +177,31 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "diagnostic_ai_eval_runs_total",
 			Help: "Count of dual-model evaluation runs (cheap vs expensive + judge).",
 		}),
+
+		ulIdle: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_rtt_idle_seconds",
+			Help: "Median RTT to the host with the link idle, from the last latency-under-load run.",
+		}, []string{"target", "direction"}),
+		ulLoaded: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_rtt_loaded_seconds",
+			Help: "Median RTT to the host while the link is saturated, from the last latency-under-load run.",
+		}, []string{"target", "direction"}),
+		ulIncrease: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_rtt_increase_seconds",
+			Help: "Loaded minus idle median RTT — the bufferbloat — from the last latency-under-load run.",
+		}, []string{"target", "direction"}),
+		ulRatio: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_bufferbloat_ratio",
+			Help: "Loaded median RTT as a multiple of the idle median, from the last latency-under-load run.",
+		}, []string{"target", "direction"}),
+		ulThroughput: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_throughput_bits_per_second",
+			Help: "Throughput achieved while saturating the link during the last latency-under-load run.",
+		}, []string{"target", "direction"}),
+		ulLoss: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_loaded_loss_ratio",
+			Help: "Packet loss to the host while the link was saturated, in [0,1], from the last latency-under-load run.",
+		}, []string{"target", "direction"}),
 	}
 
 	reg.MustRegister(
@@ -179,6 +212,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
 		m.aiModelUsed, m.aiEvalRuns,
+		m.ulIdle, m.ulLoaded, m.ulIncrease, m.ulRatio, m.ulThroughput, m.ulLoss,
 	)
 	return m
 }
@@ -272,6 +306,28 @@ func (m *Metrics) AIModelUsed(model string) { m.aiModelUsed.WithLabelValues(mode
 
 // AIEvalRun records a dual-model evaluation run.
 func (m *Metrics) AIEvalRun() { m.aiEvalRuns.Inc() }
+
+// ObserveUnderload publishes one direction's latency-under-load result. The
+// idle/loaded medians and throughput are only set when the loaded phase
+// received replies; on a fully-lost loaded phase only the loss flag is updated,
+// leaving the latency gauges at their prior value rather than reading 0ms.
+func (m *Metrics) ObserveUnderload(target string, ph underload.Phase) {
+	dir := ph.Direction
+	m.ulThroughput.WithLabelValues(target, dir).Set(ph.Bps)
+	if ph.Loaded.Recv > 0 {
+		m.ulLoss.WithLabelValues(target, dir).Set(ph.Loaded.Loss)
+	} else {
+		m.ulLoss.WithLabelValues(target, dir).Set(1)
+		return
+	}
+	if ph.Idle.Recv == 0 {
+		return
+	}
+	m.ulIdle.WithLabelValues(target, dir).Set(ph.Idle.Median.Seconds())
+	m.ulLoaded.WithLabelValues(target, dir).Set(ph.Loaded.Median.Seconds())
+	m.ulIncrease.WithLabelValues(target, dir).Set(ph.Increase().Seconds())
+	m.ulRatio.WithLabelValues(target, dir).Set(ph.Ratio())
+}
 
 // ObserveDiscovery publishes the result of one discovery pass: every candidate's
 // reachability/hop count, and whether it was selected for active probing.

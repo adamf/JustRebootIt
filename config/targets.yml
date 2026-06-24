@@ -159,3 +159,37 @@ diagnostics:
     enabled: true
     min_interval: 60s       # min time between manual runs (0 = unlimited)
     daily_cap: 20           # max manual runs per 24h (0 = unlimited)
+
+# --- Latency-under-load (bufferbloat) probe ----------------------------------
+# A normal ping measures the link while it's idle — exactly when bufferbloat is
+# invisible. Streaming stutter (Plex, video calls) happens only while the link
+# is SATURATED: a bulk transfer fills an oversized buffer, every other packet
+# queues behind it, and RTT jumps from a few ms to hundreds. This probe recreates
+# that on purpose — it saturates the link with a controlled transfer while
+# pinging a stable host — and graphs the idle-vs-loaded RTT difference (the
+# bufferbloat). A bad grade also posts a dashboard annotation.
+#
+# It moves REAL data, so it is OFF by default and bounded (byte ceiling +
+# duration). Enable it and pick the direction that matches your problem:
+#   up   - saturate the uplink. The usual culprit for a Plex SERVER pushing
+#          video, or any upload-heavy stutter (cable uplinks buffer the worst).
+#   down - saturate the downlink. For a Plex CLIENT / download-heavy stutter.
+#   both - measure each direction in turn.
+# Fix for a bad grade is almost always SQM/Smart Queues (cake/fq_codel) on the
+# offending end — not a faster plan.
+underload:
+  enabled: false            # opt-in: this generates real traffic
+  interval: 15m             # how often to run a loaded-latency test
+  target: uplink            # metric label (independent of the targets above)
+  host: 1.1.1.1             # pinged under load; a near anchor isolates YOUR link
+  direction: up             # up | down | both (see note above)
+  duration: 12s             # how long to hold the link under load per direction
+  streams: 4                # parallel transfer connections (enough to saturate)
+  bytes: 250000000          # ceiling on data moved per direction per run (~250MB)
+  pings: 20                 # RTT samples in each of the idle and loaded phases
+  timeout: 2s               # per-ping reply timeout
+  bad_increase: 60ms        # annotate when loaded RTT rises >= this (0 = never)
+  # The defaults use Cloudflare's public speed-test endpoints, built for this.
+  # Override to point at your own sink if you prefer.
+  down_url: https://speed.cloudflare.com/__down
+  up_url: https://speed.cloudflare.com/__up
