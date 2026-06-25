@@ -56,6 +56,17 @@ type Metrics struct {
 	ulRatio      *prometheus.GaugeVec
 	ulThroughput *prometheus.GaugeVec
 	ulLoss       *prometheus.GaugeVec
+
+	// On-demand-button status, so the dashboard can show what a manual run is
+	// doing. ulManualRunning is 1 while a button-triggered test is in flight; the
+	// ulManualLast* gauges hold the most recent button result (cleared each run
+	// so only the latest tested host's series remain).
+	ulManualRunning    prometheus.Gauge
+	ulManualLastInc    *prometheus.GaugeVec
+	ulManualLastIdle   *prometheus.GaugeVec
+	ulManualLastLoaded *prometheus.GaugeVec
+	ulManualLastBps    *prometheus.GaugeVec
+	ulManualLastLoss   *prometheus.GaugeVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -202,6 +213,31 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "underload_loaded_loss_ratio",
 			Help: "Packet loss to the host while the link was saturated, in [0,1], from the last latency-under-load run.",
 		}, []string{"target", "direction"}),
+
+		ulManualRunning: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "underload_manual_running",
+			Help: "1 while an on-demand (button-triggered) latency-under-load test is in progress, else 0.",
+		}),
+		ulManualLastInc: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_manual_last_increase_seconds",
+			Help: "Loaded minus idle median RTT (the bufferbloat) from the most recent on-demand test, by host and direction.",
+		}, []string{"host", "direction"}),
+		ulManualLastIdle: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_manual_last_idle_seconds",
+			Help: "Idle median RTT from the most recent on-demand test, by host and direction.",
+		}, []string{"host", "direction"}),
+		ulManualLastLoaded: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_manual_last_loaded_seconds",
+			Help: "Loaded median RTT from the most recent on-demand test, by host and direction.",
+		}, []string{"host", "direction"}),
+		ulManualLastBps: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_manual_last_throughput_bits_per_second",
+			Help: "Throughput achieved during the most recent on-demand test, by host and direction.",
+		}, []string{"host", "direction"}),
+		ulManualLastLoss: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "underload_manual_last_loaded_loss_ratio",
+			Help: "Loaded packet loss from the most recent on-demand test, in [0,1], by host and direction.",
+		}, []string{"host", "direction"}),
 	}
 
 	reg.MustRegister(
@@ -213,6 +249,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
 		m.aiModelUsed, m.aiEvalRuns,
 		m.ulIdle, m.ulLoaded, m.ulIncrease, m.ulRatio, m.ulThroughput, m.ulLoss,
+		m.ulManualRunning, m.ulManualLastInc, m.ulManualLastIdle,
+		m.ulManualLastLoaded, m.ulManualLastBps, m.ulManualLastLoss,
 	)
 	return m
 }
@@ -327,6 +365,46 @@ func (m *Metrics) ObserveUnderload(target string, ph underload.Phase) {
 	m.ulLoaded.WithLabelValues(target, dir).Set(ph.Loaded.Median.Seconds())
 	m.ulIncrease.WithLabelValues(target, dir).Set(ph.Increase().Seconds())
 	m.ulRatio.WithLabelValues(target, dir).Set(ph.Ratio())
+}
+
+// UnderloadManualRunning flags whether an on-demand (button) test is in flight,
+// so the dashboard can show a live "Running…" status.
+func (m *Metrics) UnderloadManualRunning(on bool) {
+	if on {
+		m.ulManualRunning.Set(1)
+		return
+	}
+	m.ulManualRunning.Set(0)
+}
+
+// ClearUnderloadManualLast drops the previous on-demand result series so the
+// "last test" panels only show the host just tested, not a stale one.
+func (m *Metrics) ClearUnderloadManualLast() {
+	for _, v := range []*prometheus.GaugeVec{
+		m.ulManualLastInc, m.ulManualLastIdle, m.ulManualLastLoaded,
+		m.ulManualLastBps, m.ulManualLastLoss,
+	} {
+		v.Reset()
+	}
+}
+
+// ObserveUnderloadManualLast records one direction's on-demand result under
+// host/direction labels for the "last test" status panels.
+func (m *Metrics) ObserveUnderloadManualLast(host string, ph underload.Phase) {
+	dir := ph.Direction
+	m.ulManualLastBps.WithLabelValues(host, dir).Set(ph.Bps)
+	if ph.Loaded.Recv > 0 {
+		m.ulManualLastLoss.WithLabelValues(host, dir).Set(ph.Loaded.Loss)
+	} else {
+		m.ulManualLastLoss.WithLabelValues(host, dir).Set(1)
+		return
+	}
+	if ph.Idle.Recv == 0 {
+		return
+	}
+	m.ulManualLastIdle.WithLabelValues(host, dir).Set(ph.Idle.Median.Seconds())
+	m.ulManualLastLoaded.WithLabelValues(host, dir).Set(ph.Loaded.Median.Seconds())
+	m.ulManualLastInc.WithLabelValues(host, dir).Set(ph.Increase().Seconds())
 }
 
 // ObserveDiscovery publishes the result of one discovery pass: every candidate's

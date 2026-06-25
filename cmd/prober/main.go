@@ -859,6 +859,11 @@ func (a *app) reportUnderload(ctx context.Context, gc *grafana.Client, label str
 			ph.Loaded.Median.Round(time.Millisecond), inc.Round(time.Millisecond),
 			ph.Ratio(), underload.Grade(inc), ph.Bps/1e6, ph.Loaded.Loss*100)
 
+		// On-demand runs also feed the "last test" status panels.
+		if manual {
+			a.m.ObserveUnderloadManualLast(label, ph)
+		}
+
 		bad := a.cfg.Underload.BadIncrease > 0 && inc >= a.cfg.Underload.BadIncrease
 		if (manual || bad) && ph.Idle.Recv > 0 && ph.Loaded.Recv > 0 {
 			a.annotateUnderload(ctx, gc, label, ph, manual)
@@ -926,14 +931,30 @@ func (a *app) handleUnderload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if direction == "" {
+		direction = a.cfg.Underload.Direction
+	}
+	a.m.UnderloadManualRunning(true)
+	a.m.ClearUnderloadManualLast()
+
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
+		defer a.m.UnderloadManualRunning(false)
 		prober := a.newUnderloadProber(host, direction)
 		log.Printf("manual underload %s (direction=%s) started", host, direction)
 		a.reportUnderload(a.ctx, a.underloadGrafana(), host, prober.Run(a.ctx), true)
 	}()
-	writeJSON(w, http.StatusAccepted, map[string]any{"host": host, "direction": direction})
+	// The run is asynchronous (it takes ~10–25s); its result lands in the
+	// "On-demand test" status/result panels and as a timeline annotation.
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":    "started",
+		"host":      host,
+		"direction": direction,
+		"message": fmt.Sprintf("Bufferbloat test started for %s (%s). It runs for ~10–25s; "+
+			"the status panel shows 'Running…' and the result (idle vs loaded RTT, grade) "+
+			"appears in the on-demand panels and as a timeline annotation just below.", host, direction),
+	})
 }
 
 // underloadRequest extracts host and direction from the request: query params, a
