@@ -960,7 +960,7 @@
       "type": "volkovlabs-form-panel",
       "id": 54,
       "title": "Run a bufferbloat test on an IP",
-      "description": "Enter an IP (or hostname), pick a direction, and click run. The prober saturates the link in that direction while pinging the IP. The run takes ~10–25s: the 'Test status' panel shows 'Running…', then the idle-vs-loaded RTT and grade appear in the 'Last on-demand test' panels and as a timeline annotation. Proxied server-side through Grafana to the prober (no prober port exposed). Generates real traffic; rate-limited.",
+      "description": "Enter an IP (or hostname), pick a direction, and click run. The prober saturates the link in that direction while pinging the IP, then returns the result. The button WAITS for the test to finish (~10–25s) and shows a success notification when done; the idle-vs-loaded RTT and grade also appear in the 'Last on-demand test' panels and as a timeline annotation. Proxied server-side through Grafana to the prober (no prober port exposed). Generates real traffic; rate-limited.",
       "datasource": { "type": "grafana", "uid": "-- Grafana --" },
       "gridPos": { "h": 8, "w": 10, "x": 0, "y": 106 },
       "options": {
@@ -968,7 +968,7 @@
         "layout": { "variant": "single", "padding": 8 },
         "saveDefault": { "variant": "hidden" },
         "reset": { "variant": "hidden" },
-        "submit": { "variant": "primary", "text": "🚦 Run test (~10–25s; watch status →)", "icon": "play", "size": "md" },
+        "submit": { "variant": "primary", "text": "🚦 Run test (waits ~10–25s for the result)", "icon": "play", "size": "md" },
         "initial": { "method": "-" },
         "updateEnabled": "auto",
         "update": {

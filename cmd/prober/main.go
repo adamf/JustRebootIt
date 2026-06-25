@@ -902,14 +902,16 @@ func (a *app) annotateUnderload(ctx context.Context, gc *grafana.Client, label s
 	}
 }
 
-// handleUnderload kicks off an on-demand latency-under-load test against a
-// user-supplied IP/host (the dashboard "run a bufferbloat test" button). Like
-// the AI button it is rate-limited and asynchronous: the run takes ~10–25s and
-// its result lands as a Grafana annotation and the underload_* metrics, so this
-// returns 202 as soon as the job is accepted.
+// handleUnderload runs an on-demand latency-under-load test against a
+// user-supplied IP/host (the dashboard "run a bufferbloat test" button) and
+// returns the result. It runs SYNCHRONOUSLY — the request blocks for the ~10–25s
+// the test takes and responds with the idle/loaded RTT and grade — so the
+// caller gets immediate, unambiguous feedback rather than a fire-and-forget
+// acknowledgement. The result is also published to the underload_* metrics and
+// posted as a Grafana annotation. It is rate-limited.
 func (a *app) handleUnderload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "use POST"})
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "use POST or GET"})
 		return
 	}
 	if !a.cfg.Underload.Manual.Enabled {
@@ -917,6 +919,8 @@ func (a *app) handleUnderload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, direction := underloadRequest(r)
+	log.Printf("manual underload request from %s: method=%s host=%q direction=%q content-type=%q",
+		r.RemoteAddr, r.Method, host, direction, r.Header.Get("Content-Type"))
 	if host == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing host (enter an IP or hostname)"})
 		return
@@ -927,34 +931,80 @@ func (a *app) handleUnderload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "direction must be down, up, or both"})
 		return
 	}
+	if direction == "" {
+		direction = a.cfg.Underload.Direction
+	}
 	if !a.allowUnderloadManual(time.Now()) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "rate limited; try again shortly"})
 		return
 	}
 
-	if direction == "" {
-		direction = a.cfg.Underload.Direction
+	// Cap the on-demand run so a synchronous request finishes well within
+	// Grafana's datasource proxy timeout (~30s), even for direction "both".
+	uc := a.cfg.Underload
+	dur := uc.Duration
+	if dur > 8*time.Second {
+		dur = 8 * time.Second
 	}
+	pings := uc.Pings
+	if pings > 12 {
+		pings = 12
+	}
+	prober := underload.New(underload.Config{
+		Host:       host,
+		Direction:  direction,
+		Duration:   dur,
+		Streams:    uc.Streams,
+		DownURL:    uc.DownURL,
+		UpURL:      uc.UpURL,
+		Bytes:      uc.Bytes,
+		Pings:      pings,
+		Timeout:    uc.Timeout,
+		Privileged: a.cfg.Privileged,
+	})
+
 	a.m.UnderloadManualRunning(true)
+	defer a.m.UnderloadManualRunning(false)
 	a.m.ClearUnderloadManualLast()
 
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		defer a.m.UnderloadManualRunning(false)
-		prober := a.newUnderloadProber(host, direction)
-		log.Printf("manual underload %s (direction=%s) started", host, direction)
-		a.reportUnderload(a.ctx, a.underloadGrafana(), host, prober.Run(a.ctx), true)
-	}()
-	// The run is asynchronous (it takes ~10–25s); its result lands in the
-	// "On-demand test" status/result panels and as a timeline annotation.
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":    "started",
+	log.Printf("manual underload %s (direction=%s) running synchronously", host, direction)
+	runCtx, cancel := context.WithTimeout(a.ctx, 28*time.Second)
+	defer cancel()
+	res := prober.Run(runCtx)
+	a.reportUnderload(a.ctx, a.underloadGrafana(), host, res, true)
+
+	if len(res.Phases) == 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"status": "failed", "host": host, "direction": direction,
+			"error": "the test produced no result (host unreachable, or load endpoint blocked)",
+		})
+		return
+	}
+
+	phases := make([]map[string]any, 0, len(res.Phases))
+	var summary string
+	for _, ph := range res.Phases {
+		inc := ph.Increase()
+		phases = append(phases, map[string]any{
+			"direction":       ph.Direction,
+			"grade":           underload.Grade(inc),
+			"idle_ms":         ph.Idle.Median.Milliseconds(),
+			"loaded_ms":       ph.Loaded.Median.Milliseconds(),
+			"increase_ms":     inc.Milliseconds(),
+			"throughput_mbps": float64(int64(ph.Bps/1e5)) / 10,
+			"loss_pct":        float64(int64(ph.Loaded.Loss*1000)) / 10,
+		})
+		summary += fmt.Sprintf("%s: grade %s, %dms idle → %dms loaded (+%dms), %.0f Mbps. ",
+			ph.Direction, underload.Grade(inc),
+			ph.Idle.Median.Milliseconds(), ph.Loaded.Median.Milliseconds(),
+			inc.Milliseconds(), ph.Bps/1e6)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "done",
 		"host":      host,
 		"direction": direction,
-		"message": fmt.Sprintf("Bufferbloat test started for %s (%s). It runs for ~10–25s; "+
-			"the status panel shows 'Running…' and the result (idle vs loaded RTT, grade) "+
-			"appears in the on-demand panels and as a timeline annotation just below.", host, direction),
+		"phases":    phases,
+		"message":   strings.TrimSpace(summary),
 	})
 }
 

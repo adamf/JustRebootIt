@@ -306,13 +306,14 @@ underload:
 There's also a **"Run a bufferbloat test on an IP"** button on the dashboard:
 enter any IP (e.g. your Plex peer's public IP), pick a direction, and it runs a
 one-off latency-under-load test against that host on demand — no config edit
-needed. The run takes ~10–25s; right beside the button, a **"Test status"**
-panel shows `Running…` while it works, and **"Last on-demand test"** panels then
-show the RTT increase (grade-coloured) and throughput, alongside a timeline
-annotation. It works even when the scheduled probe is off (`enabled: false`);
-the `underload.manual` block gates and rate-limits it. The request is proxied
-server-side through Grafana to the prober, so no prober port is exposed.
-(Status/result panels refresh on the dashboard's interval, default 30s.)
+needed. The button **waits for the test to finish (~10–25s) and shows a success
+notification with the result**, so you get immediate feedback; the idle-vs-loaded
+RTT and grade also land in the **"Last on-demand test"** panels beside it and as
+a timeline annotation. It works even when the scheduled probe is off
+(`enabled: false`); the `underload.manual` block gates and rate-limits it. The
+request is proxied server-side through Grafana to the prober, so no prober port
+is exposed. (If a click seems to do nothing, see Troubleshooting — the prober
+logs every request.)
 
 The fix for a bad grade is almost always **SQM / Smart Queues** (cake or
 fq_codel) on the offending end — it caps the link slightly below line rate to
@@ -594,6 +595,28 @@ it will log auth failures and report `udm_up 0` without affecting anything else.
   traceroutes as everything else, so it needs `NET_RAW` (see above). It also only
   runs its first pass at startup and then every `discovery.interval`; give it a
   moment. With no `candidates` configured it stays dormant by design.
+- **The "Run a bufferbloat test" button doesn't seem to do anything** → the
+  button now *waits* for the test (~10–25s) and shows a success notification with
+  the result, but if you're unsure it's running, the prober logs every request:
+
+  ```sh
+  docker compose logs -f prober | grep -i underload
+  ```
+
+  You should see `manual underload request ... host="..."` the instant you click,
+  then `manual underload ... running synchronously`, then the result line
+  (`underload <host>/<dir>: idle=... loaded=... grade ...`). If you see the
+  request line with `host=""`, the form didn't send the IP; if you see no request
+  line at all, the click didn't reach the prober. You can test the endpoint
+  directly, bypassing the form, from the Grafana container:
+
+  ```sh
+  docker compose exec grafana wget -qO- --header 'Content-Type: application/json' \
+    --post-data '{"host":"1.1.1.1","direction":"down"}' \
+    http://prober:9430/api/underload
+  ```
+
+  It returns the result JSON (grade, idle/loaded ms, throughput) directly.
 
 ## Development
 
