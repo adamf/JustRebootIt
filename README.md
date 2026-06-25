@@ -279,10 +279,13 @@ underload:
 There's also a **"Run a bufferbloat test on an IP"** button on the dashboard:
 enter any IP (e.g. your Plex peer's public IP), pick a direction, and it runs a
 one-off latency-under-load test against that host on demand — no config edit
-needed. The result lands as an annotation and the `underload_*` metrics within
-~10–25s. It works even when the scheduled probe is off (`enabled: false`); the
-`underload.manual` block gates and rate-limits it. The request is proxied
+needed. The run takes ~10–25s; right beside the button, a **"Test status"**
+panel shows `Running…` while it works, and **"Last on-demand test"** panels then
+show the RTT increase (grade-coloured) and throughput, alongside a timeline
+annotation. It works even when the scheduled probe is off (`enabled: false`);
+the `underload.manual` block gates and rate-limits it. The request is proxied
 server-side through Grafana to the prober, so no prober port is exposed.
+(Status/result panels refresh on the dashboard's interval, default 30s.)
 
 The fix for a bad grade is almost always **SQM / Smart Queues** (cake or
 fq_codel) on the offending end — it caps the link slightly below line rate to

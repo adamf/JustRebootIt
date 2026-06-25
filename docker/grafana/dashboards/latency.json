@@ -960,15 +960,15 @@
       "type": "volkovlabs-form-panel",
       "id": 54,
       "title": "Run a bufferbloat test on an IP",
-      "description": "Enter an IP (or hostname) and a direction, then run an on-demand latency-under-load test against it: the prober saturates the link in that direction while pinging the IP, and posts the idle-vs-loaded RTT (the bufferbloat) as an annotation and the underload_* metrics within ~10–25s. Proxied server-side through Grafana to the prober, so no prober port is exposed. Generates real traffic; rate-limited.",
+      "description": "Enter an IP (or hostname), pick a direction, and click run. The prober saturates the link in that direction while pinging the IP. The run takes ~10–25s: the 'Test status' panel shows 'Running…', then the idle-vs-loaded RTT and grade appear in the 'Last on-demand test' panels and as a timeline annotation. Proxied server-side through Grafana to the prober (no prober port exposed). Generates real traffic; rate-limited.",
       "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 106 },
+      "gridPos": { "h": 8, "w": 10, "x": 0, "y": 106 },
       "options": {
         "sync": false,
-        "layout": { "variant": "single", "padding": 10 },
+        "layout": { "variant": "single", "padding": 8 },
         "saveDefault": { "variant": "hidden" },
         "reset": { "variant": "hidden" },
-        "submit": { "variant": "primary", "text": "🚦 Run bufferbloat test", "icon": "play", "size": "md" },
+        "submit": { "variant": "primary", "text": "🚦 Run test (~10–25s; watch status →)", "icon": "play", "size": "md" },
         "initial": { "method": "-" },
         "updateEnabled": "auto",
         "update": {
@@ -995,15 +995,17 @@
             "title": "IP or hostname to test (e.g. your Plex peer's public IP)",
             "type": "string",
             "section": "",
-            "value": ""
+            "value": "",
+            "width": 0
           },
           {
             "id": "direction",
             "uid": "direction",
-            "title": "Direction — up saturates your uplink (Plex server), down your downlink (client)",
+            "title": "Direction (up = your uplink / Plex server, down = downlink / client)",
             "type": "radio",
             "section": "",
             "value": "down",
+            "width": 0,
             "options": [
               { "id": "down", "label": "down" },
               { "id": "up", "label": "up" },
@@ -1014,12 +1016,119 @@
       }
     },
     {
+      "type": "stat",
+      "id": 55,
+      "title": "Test status",
+      "description": "Shows 'Running…' while an on-demand bufferbloat test is in progress, then returns to 'Idle'. (Updates on the dashboard refresh interval.)",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 8, "w": 4, "x": 10, "y": 106 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "mappings": [
+            { "type": "value", "options": {
+              "0": { "text": "Idle", "color": "green", "index": 1 },
+              "1": { "text": "Running…", "color": "blue", "index": 0 }
+            } }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_manual_running",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 56,
+      "title": "Last on-demand test — RTT increase",
+      "description": "The bufferbloat from the most recent on-demand test: how much the median RTT rose under load (loaded minus idle). Green is good (<30ms), red is bad (>=100ms). Shows the tested host and direction. 'No data' until you run a test.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 8, "w": 5, "x": 14, "y": 106 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.03 },
+            { "color": "orange", "value": 0.06 },
+            { "color": "red", "value": 0.1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_manual_last_increase_seconds",
+          "legendFormat": "{{host}} {{direction}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 57,
+      "title": "Last on-demand test — throughput",
+      "description": "Throughput achieved while saturating the link during the most recent on-demand test — the context for the RTT increase beside it. 'No data' until you run a test.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 106 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_manual_last_throughput_bits_per_second",
+          "legendFormat": "{{host}} {{direction}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "type": "annolist",
       "id": 53,
       "title": "Bufferbloat events",
       "description": "Latency-under-load runs posted to the timeline (scheduled runs with a poor grade, plus every on-demand run from the button). Click an entry to jump to when it happened. Empty until a run occurs.",
       "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 106 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 114 },
       "options": {
         "onlyFromThisDashboard": false,
         "onlyInTimeRange": false,
