@@ -44,9 +44,10 @@ import (
 
 func main() {
 	configPath := flag.String("config", "/etc/justrebootit/targets.yml", "path to the prober config file")
+	overridesPath := flag.String("overrides", "", "path to an optional overrides file layered on top of -config (default: a sibling overrides.yml, applied if present)")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.LoadWithOverrides(*configPath, *overridesPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}

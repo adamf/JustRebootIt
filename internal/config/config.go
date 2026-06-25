@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -356,9 +357,20 @@ func Default() Config {
 	}
 }
 
-// Load reads configuration from path, applying defaults for any field the file
-// leaves unset, then validates the result.
+// Load reads configuration from path, layers an optional gitignored overrides
+// file (a sibling "overrides.yml" next to path) on top, applies defaults for any
+// field still unset, and validates the result. The overrides file lets a user
+// keep local customizations (their gateway IP, extra targets) that a deploy or
+// git pull won't clobber, since the shipped targets.yml stays pristine.
 func Load(path string) (Config, error) {
+	return LoadWithOverrides(path, "")
+}
+
+// LoadWithOverrides is Load with an explicit overrides path. An empty
+// overridesPath auto-discovers a sibling "overrides.yml" next to path and is a
+// no-op when that file is absent; a non-empty overridesPath that cannot be read
+// is an error (the user named a file they expect to exist).
+func LoadWithOverrides(path, overridesPath string) (Config, error) {
 	cfg := Default()
 
 	data, err := os.ReadFile(path)
@@ -368,10 +380,77 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
+
+	auto := overridesPath == ""
+	if auto {
+		overridesPath = filepath.Join(filepath.Dir(path), "overrides.yml")
+	}
+	odata, oerr := os.ReadFile(overridesPath)
+	switch {
+	case oerr == nil:
+		if err := mergeOverrides(&cfg, odata); err != nil {
+			return Config{}, fmt.Errorf("parse overrides %q: %w", overridesPath, err)
+		}
+	case auto && os.IsNotExist(oerr):
+		// No overrides file — the common case; nothing to layer.
+	default:
+		return Config{}, fmt.Errorf("read overrides %q: %w", overridesPath, oerr)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// mergeOverrides layers an overrides document on top of an already-loaded
+// Config. Scalar and nested fields are overwritten by whatever the overrides
+// declare (YAML leaves unmentioned fields untouched). The two target lists —
+// targets and discovery.candidates — are merged BY NAME instead of replaced, so
+// an override entry with an existing name replaces just that target while new
+// names are appended; this is what makes the overrides file additive.
+func mergeOverrides(cfg *Config, data []byte) error {
+	baseTargets := cfg.Targets
+	baseCandidates := cfg.Discovery.Candidates
+
+	// Layer scalars/nested fields. This also overwrites the two slice fields when
+	// the overrides mention them, so we re-merge those by name below.
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return err
+	}
+	// Parse the overrides alone to recover exactly which targets/candidates they
+	// declared (independent of what layering left on cfg).
+	var ov Config
+	if err := yaml.Unmarshal(data, &ov); err != nil {
+		return err
+	}
+	cfg.Targets = mergeTargetsByName(baseTargets, ov.Targets)
+	cfg.Discovery.Candidates = mergeTargetsByName(baseCandidates, ov.Discovery.Candidates)
+	return nil
+}
+
+// mergeTargetsByName returns base with extra layered on top: an extra target
+// whose name matches a base target replaces that entry in place; an extra target
+// with a new name is appended. Order is stable (base order, then new names).
+func mergeTargetsByName(base, extra []Target) []Target {
+	if len(extra) == 0 {
+		return base
+	}
+	out := make([]Target, len(base))
+	copy(out, base)
+	idx := make(map[string]int, len(out))
+	for i, t := range out {
+		idx[t.Name] = i
+	}
+	for _, t := range extra {
+		if i, ok := idx[t.Name]; ok {
+			out[i] = t
+		} else {
+			idx[t.Name] = len(out)
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Validate checks that the configuration is internally consistent and usable.
