@@ -193,3 +193,11 @@ underload:
   # Override to point at your own sink if you prefer.
   down_url: https://speed.cloudflare.com/__down
   up_url: https://speed.cloudflare.com/__up
+  # On-demand "run a bufferbloat test on this IP" dashboard button. It reuses the
+  # transfer settings above but takes its host from the request, so it works even
+  # when the scheduled probe (enabled: false) is off. A click moves real data, so
+  # it is rate-limited.
+  manual:
+    enabled: true             # the dashboard button; a click is explicit consent
+    min_interval: 30s         # min time between on-demand runs (0 = unlimited)
+    daily_cap: 20             # max on-demand runs per 24h (0 = unlimited)

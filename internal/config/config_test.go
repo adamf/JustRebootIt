@@ -91,6 +91,19 @@ func TestValidateUnderload(t *testing.T) {
 		{"up needs up_url", func(c *Config) { c.Underload.Direction = "up"; c.Underload.UpURL = "" }, true},
 		{"down needs down_url", func(c *Config) { c.Underload.DownURL = "" }, true},
 		{"disabled skips checks", func(c *Config) { c.Underload.Enabled = false; c.Underload.Host = "" }, false},
+		// The manual button shares the transfer settings, so they're validated
+		// even when the scheduled probe is off — but host/target are not required.
+		{"manual-only valid without host", func(c *Config) {
+			c.Underload.Enabled = false
+			c.Underload.Host = ""
+			c.Underload.Target = ""
+			c.Underload.Manual.Enabled = true
+		}, false},
+		{"manual-only validates transfer params", func(c *Config) {
+			c.Underload.Enabled = false
+			c.Underload.Manual.Enabled = true
+			c.Underload.Direction = "sideways"
+		}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

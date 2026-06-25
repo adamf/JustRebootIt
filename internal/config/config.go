@@ -123,6 +123,27 @@ type Underload struct {
 	// run posts a Grafana annotation (0 disables annotations). 60ms ≈ a "C"
 	// bufferbloat grade — enough to be felt on a stream.
 	BadIncrease time.Duration `yaml:"bad_increase"`
+
+	// Manual configures the on-demand "run a bufferbloat test on this IP" button
+	// on the dashboard. It reuses the transfer settings above but takes its host
+	// from the request, so it works even when the scheduled probe (Enabled) is
+	// off. See ManualUnderload.
+	Manual ManualUnderload `yaml:"manual"`
+}
+
+// ManualUnderload controls the on-demand latency-under-load test a user triggers
+// from the dashboard (enter an IP, click "run"). Because each run saturates the
+// link with real traffic and the dashboard may be shared, it is rate-limited and
+// daily-capped.
+type ManualUnderload struct {
+	// Enabled turns the on-demand endpoint on. When false, the button's request
+	// is rejected with 503.
+	Enabled bool `yaml:"enabled"`
+	// MinInterval is the minimum time between manual runs; a click within the
+	// window is rejected with 429. 0 = unlimited.
+	MinInterval time.Duration `yaml:"min_interval"`
+	// DailyCap bounds manual runs per rolling 24h. 0 = unlimited.
+	DailyCap int `yaml:"daily_cap"`
 }
 
 // Discovery automatically promotes a path-diverse subset of a candidate pool to
@@ -319,6 +340,11 @@ func Default() Config {
 			Pings:       20,
 			Timeout:     2 * time.Second,
 			BadIncrease: 60 * time.Millisecond,
+			Manual: ManualUnderload{
+				Enabled:     true, // a click is explicit consent; the panel gates it
+				MinInterval: 30 * time.Second,
+				DailyCap:    20,
+			},
 		},
 	}
 }
@@ -406,21 +432,14 @@ func (c Config) Validate() error {
 			return fmt.Errorf("diagnostics.workers must be >= 1, got %d", c.Diagnostics.Workers)
 		}
 	}
-	if c.Underload.Enabled {
+	// The transfer settings are shared by the scheduled probe and the on-demand
+	// button, so validate them when either is active.
+	if c.Underload.Enabled || c.Underload.Manual.Enabled {
 		u := c.Underload
-		if u.Host == "" {
-			return fmt.Errorf("underload.host is required when underload is enabled")
-		}
-		if u.Target == "" {
-			return fmt.Errorf("underload.target (metric label) is required when underload is enabled")
-		}
 		switch u.Direction {
 		case "down", "up", "both":
 		default:
 			return fmt.Errorf("underload.direction must be down|up|both, got %q", u.Direction)
-		}
-		if u.Interval <= 0 {
-			return fmt.Errorf("underload.interval must be > 0 when underload is enabled")
 		}
 		if u.Streams < 1 {
 			return fmt.Errorf("underload.streams must be >= 1, got %d", u.Streams)
@@ -439,6 +458,20 @@ func (c Config) Validate() error {
 		}
 		if (u.Direction == "up" || u.Direction == "both") && u.UpURL == "" {
 			return fmt.Errorf("underload.up_url is required for direction %q", u.Direction)
+		}
+	}
+	// The scheduled probe additionally needs a fixed host, metric label, and
+	// interval (the on-demand button takes its host from the request).
+	if c.Underload.Enabled {
+		u := c.Underload
+		if u.Host == "" {
+			return fmt.Errorf("underload.host is required when underload is enabled")
+		}
+		if u.Target == "" {
+			return fmt.Errorf("underload.target (metric label) is required when underload is enabled")
+		}
+		if u.Interval <= 0 {
+			return fmt.Errorf("underload.interval must be > 0 when underload is enabled")
 		}
 	}
 	return nil
