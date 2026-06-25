@@ -105,6 +105,7 @@ func main() {
 				DailyBudget:     cfg.Diagnostics.AI.DailyBudget,
 				FarHops:         cfg.Diagnostics.AI.FarHops,
 				FarTTL:          cfg.Diagnostics.AI.FarRepeatTTL,
+				SkipFar:         cfg.Diagnostics.AI.SkipFar,
 			})
 			a.selector = aidiag.NewModelSelector(
 				analyzer.CheapModel(), analyzer.ExpensiveModel(),
@@ -611,11 +612,13 @@ func (a *app) analyze(ev aidiag.Event) {
 	if ev.Reason == "manual" {
 		tags = append(tags, "manual")
 	}
+	// res.Text already opens with the one-sentence root cause (res.Headline is a
+	// copy of that first line), so don't prepend the headline again — that just
+	// duplicated the whole sentence in the annotation.
 	ann := grafana.Annotation{
 		Time: ev.When,
 		Tags: tags,
-		Text: fmt.Sprintf("Event #%d — %s (target %s)\n\n%s",
-			ev.ID, res.Headline, ev.Target, res.Text),
+		Text: fmt.Sprintf("Event #%d (%s) — %s", ev.ID, ev.Target, res.Text),
 	}
 	if err := a.grafana.Post(annCtx, ann); err != nil {
 		log.Printf("ai diagnosis #%d: posting annotation: %v", ev.ID, err)

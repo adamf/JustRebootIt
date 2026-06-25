@@ -159,7 +159,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"target"}),
 		aiSuppressed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "diagnostic_ai_suppressed_total",
-			Help: "Count of events that reused a prior analysis or were throttled instead of triggering a new AI investigation, by reason (repeat|rate-limited|budget).",
+			Help: "Count of events that reused a prior analysis, were throttled, or were classified as exogenous instead of triggering a new AI investigation, by reason (repeat|rate-limited|budget|exogenous).",
 		}, []string{"reason"}),
 		aiModelUsed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "diagnostic_ai_model_used_total",

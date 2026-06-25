@@ -35,11 +35,12 @@ Reasoning guidance:
 
 Keep tool use focused — a handful of well-chosen queries, not dozens.
 
-Output format — the dashboard renders your answer as PLAIN TEXT, so do NOT use any Markdown: no **bold**, no *italics*, no # headings, no --- horizontal rules, no backticks, no bullet syntax. Write plain sentences only.
-- Begin IMMEDIATELY with the one-sentence root cause and where it is — no preamble like "Here is the diagnosis" or "The picture is complete". This first sentence becomes the dashboard headline, so make it stand on its own.
-- Then 2-5 short sentences of supporting evidence drawn from the tools.
-- Then a line "Confidence: low|medium|high".
-- Then a line "Recommended action:" with one practical next step (e.g. what to show the ISP, or a local fix like enabling Smart Queues).`
+Output format — the dashboard renders your answer as a single block of PLAIN TEXT and may collapse line breaks into spaces, so:
+- Use NO Markdown whatsoever: no **bold**, no *italics*, no # headings, no --- rules, no backticks, no bullet syntax.
+- Write flowing prose. End EVERY sentence with a period so the text still reads correctly when the line breaks are removed.
+- Begin IMMEDIATELY with the one-sentence root cause and where it is — no preamble like "Here is the diagnosis" or "The picture is complete". This first sentence becomes the dashboard headline, so make it stand on its own and do NOT repeat it later.
+- Then 2-4 short sentences of the key supporting evidence from the tools. Be concise; the whole answer should be at most about 6 sentences.
+- End with two full sentences: "Confidence is low/medium/high." and "Recommended action: <one practical next step>." (e.g. what to show the ISP, or a local fix like enabling Smart Queues). Write these as complete sentences, not bare labels, so they don't run into the preceding text.`
 
 // userPrompt renders the specific event as the agent's opening context.
 func userPrompt(ev Event) string {

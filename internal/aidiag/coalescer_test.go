@@ -149,6 +149,40 @@ func TestCoalescerFarUsesLongerTTL(t *testing.T) {
 	}
 }
 
+func TestCoalescerSkipsIsolatedFar(t *testing.T) {
+	c := NewCoalescer(CoalescerConfig{
+		SharedThreshold: 99, // never shared
+		RepeatTTL:       time.Hour,
+		MinInterval:     0,
+		FarHops:         3,
+		FarTTL:          12 * time.Hour,
+		SkipFar:         true,
+	})
+	now := time.Now()
+
+	// An isolated far target (8 hops) is classified exogenous and skipped — no AI.
+	d := c.Decide(Event{ID: 1, Target: "distant", Group: "anchor", Reason: "loss", Hops: 8}, now)
+	if d.Investigate {
+		t.Fatalf("isolated far event should be skipped, got %+v", d)
+	}
+	if d.Skip != "exogenous" || d.ScopeKind != "far" {
+		t.Errorf("expected skip=exogenous scope=far, got skip=%q scope=%q", d.Skip, d.ScopeKind)
+	}
+
+	// A near target with the same isolation is still investigated.
+	if dn := c.Decide(Event{ID: 2, Target: "near", Reason: "loss", Hops: 2}, now); !dn.Investigate {
+		t.Errorf("near event should still investigate, got %+v", dn)
+	}
+
+	// With SkipFar off, the far event is investigated (cheaper model path).
+	c2 := NewCoalescer(CoalescerConfig{
+		SharedThreshold: 99, RepeatTTL: time.Hour, MinInterval: 0, FarHops: 3, FarTTL: 12 * time.Hour, SkipFar: false,
+	})
+	if d2 := c2.Decide(Event{ID: 3, Target: "distant", Group: "anchor", Reason: "loss", Hops: 8}, now); !d2.Investigate || d2.ScopeKind != "far" {
+		t.Errorf("with SkipFar off, far event should investigate, got %+v", d2)
+	}
+}
+
 func TestCoalescerNearVsFarScope(t *testing.T) {
 	c := NewCoalescer(CoalescerConfig{
 		SharedThreshold: 99, RepeatTTL: time.Hour, MinInterval: 0, FarHops: 3, FarTTL: 12 * time.Hour,

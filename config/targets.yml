@@ -98,7 +98,6 @@ discovery:
     - { name: cloudflare-alt,  host: 1.0.0.1 }
     - { name: google-alt,      host: 8.8.4.4 }
     - { name: quad9-alt,       host: 149.112.112.112 }
-    - { name: level3-alt,      host: 4.2.2.1 }
     - { name: opendns-a,       host: 208.67.222.222 }
     - { name: opendns-b,       host: 208.67.220.220 }
     - { name: verisign-dns,    host: 64.6.64.6 }
@@ -143,6 +142,10 @@ diagnostics:
     # Distance: far targets aren't our internet problem, so suppress them harder.
     far_hops: 3             # a target reached in more than this many hops is "far"
     far_repeat_ttl: 12h     # reuse a far problem's analysis this long (vs repeat_ttl)
+    skip_far: true          # skip the AI entirely for an isolated far event (one
+                            # distant IP acting up while every other path is fine
+                            # = the far end's problem, not ours). false = still
+                            # investigate far problems with the cheaper model.
     # Model selection: learn cheap-vs-expensive per problem class to cut cost.
     model_eval: true        # eval cheap vs expensive and lock in the good-enough one
     model_cheap: claude-sonnet-4-6  # used for far problems and classes where cheap suffices

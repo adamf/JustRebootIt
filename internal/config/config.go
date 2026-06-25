@@ -190,6 +190,12 @@ type AIDiagnostics struct {
 	FarHops int `yaml:"far_hops"`
 	// FarRepeatTTL is the (longer) reuse window for far problems.
 	FarRepeatTTL time.Duration `yaml:"far_repeat_ttl"`
+	// SkipFar, when true (the default), skips the AI entirely for an isolated
+	// far event — a single distant target spiking or going dark while every
+	// other path is healthy. That's the far end's problem, not your network, so
+	// it isn't worth an LLM call. Set false to investigate far problems anyway
+	// (with the cheaper model and the longer FarRepeatTTL reuse window).
+	SkipFar bool `yaml:"skip_far"`
 
 	// ModelEval, when on, evaluates the cheap model against the expensive one
 	// per problem class and locks in whichever is good enough. When off, near/
@@ -242,6 +248,7 @@ func Default() Config {
 				SharedThreshold: 3,
 				FarHops:         3,
 				FarRepeatTTL:    12 * time.Hour,
+				SkipFar:         true,
 				ModelEval:       true,
 				ModelCheap:      "claude-sonnet-4-6",
 				EvalSamples:     3,
