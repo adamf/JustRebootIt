@@ -37,6 +37,7 @@ import (
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
 	"github.com/adamf/justrebootit/internal/tracer"
+	"github.com/adamf/justrebootit/internal/underload"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -120,6 +121,16 @@ func main() {
 		a.startTarget(t)
 	}
 
+	// Latency-under-load (bufferbloat) probe. Opt-in: it moves real data, so it
+	// only runs when explicitly enabled in the config.
+	if cfg.Underload.Enabled {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.runUnderload(ctx)
+		}()
+	}
+
 	// Path discovery promotes a diverse subset of the candidate pool. With no
 	// candidates it has nothing to do, so it stays dormant.
 	if cfg.Discovery.Enabled && len(cfg.Discovery.Candidates) > 0 {
@@ -187,6 +198,13 @@ type app struct {
 	manualLast     time.Time
 	manualDayStart time.Time
 	manualDayCount int
+
+	// On-demand underload rate limiting (the dashboard "run a bufferbloat test"
+	// button).
+	ulManualMu       sync.Mutex
+	ulManualLast     time.Time
+	ulManualDayStart time.Time
+	ulManualDayCount int
 }
 
 // allowManual reports whether a manual investigation may run now, enforcing the
@@ -263,6 +281,9 @@ func (a *app) httpHandler(reg *prometheus.Registry) http.Handler {
 	// datasource), so this endpoint stays on the internal network and is never
 	// exposed to the host.
 	mux.HandleFunc("/api/investigate", a.handleInvestigate)
+	// On-demand latency-under-load (bufferbloat) test against a user-supplied IP,
+	// triggered by the dashboard button. Same server-side proxying as above.
+	mux.HandleFunc("/api/underload", a.handleUnderload)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("justrebootit prober\nsee /metrics\n"))
 	})
@@ -758,6 +779,205 @@ func (a *app) reconcileDiscovered(selected []discovery.PathInfo) {
 			a.traceLoop(tctx, t)
 		}(t)
 	}
+}
+
+// newUnderloadProber builds a Prober from the underload transfer settings,
+// overriding the host (and, when non-empty, the direction). It backs both the
+// scheduled loop and the on-demand button.
+func (a *app) newUnderloadProber(host, direction string) *underload.Prober {
+	uc := a.cfg.Underload
+	if direction == "" {
+		direction = uc.Direction
+	}
+	return underload.New(underload.Config{
+		Host:       host,
+		Direction:  direction,
+		Duration:   uc.Duration,
+		Streams:    uc.Streams,
+		DownURL:    uc.DownURL,
+		UpURL:      uc.UpURL,
+		Bytes:      uc.Bytes,
+		Pings:      uc.Pings,
+		Timeout:    uc.Timeout,
+		Privileged: a.cfg.Privileged,
+	})
+}
+
+// underloadGrafana builds the annotation client. Annotations are best-effort and
+// independent of the AI feature; the client is nil (a no-op) when Grafana
+// credentials aren't set.
+func (a *app) underloadGrafana() *grafana.Client {
+	return grafana.New(
+		env("GRAFANA_URL", "http://grafana:3000"),
+		env("GRAFANA_USER", "admin"),
+		os.Getenv("GRAFANA_ADMIN_PASSWORD"),
+	)
+}
+
+// runUnderload periodically measures latency-under-load (bufferbloat): it
+// saturates the link with a controlled transfer while pinging a stable host,
+// and publishes the idle-vs-loaded RTT difference. The first run happens
+// immediately so the dashboard has a reading at startup. A run with a bad
+// bufferbloat grade posts a Grafana annotation so it shows up on the timeline.
+func (a *app) runUnderload(ctx context.Context) {
+	uc := a.cfg.Underload
+	prober := a.newUnderloadProber(uc.Host, uc.Direction)
+	gc := a.underloadGrafana()
+
+	log.Printf("latency-under-load probe enabled (target=%s host=%s direction=%s every %s)",
+		uc.Target, uc.Host, uc.Direction, uc.Interval)
+
+	run := func() {
+		a.reportUnderload(ctx, gc, uc.Target, prober.Run(ctx), false)
+	}
+
+	run()
+	ticker := time.NewTicker(uc.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
+// reportUnderload publishes metrics and logs for each phase of an underload
+// result and annotates it. A scheduled run annotates only a bad grade; a manual
+// run annotates always (the user asked, so show them the answer).
+func (a *app) reportUnderload(ctx context.Context, gc *grafana.Client, label string, res underload.Result, manual bool) {
+	for _, ph := range res.Phases {
+		a.m.ObserveUnderload(label, ph)
+		inc := ph.Increase()
+		log.Printf("underload %s/%s: idle=%s loaded=%s (+%s, %.1fx, grade %s) throughput=%.1f Mbps loss=%.0f%%",
+			label, ph.Direction, ph.Idle.Median.Round(time.Millisecond),
+			ph.Loaded.Median.Round(time.Millisecond), inc.Round(time.Millisecond),
+			ph.Ratio(), underload.Grade(inc), ph.Bps/1e6, ph.Loaded.Loss*100)
+
+		bad := a.cfg.Underload.BadIncrease > 0 && inc >= a.cfg.Underload.BadIncrease
+		if (manual || bad) && ph.Idle.Recv > 0 && ph.Loaded.Recv > 0 {
+			a.annotateUnderload(ctx, gc, label, ph, manual)
+		}
+	}
+}
+
+// annotateUnderload posts a Grafana annotation for a latency-under-load result,
+// so the spike-under-load is visible on the timeline next to the latency graphs.
+// The wording adapts to the bufferbloat grade.
+func (a *app) annotateUnderload(ctx context.Context, gc *grafana.Client, label string, ph underload.Phase, manual bool) {
+	inc := ph.Increase()
+	grade := underload.Grade(inc)
+	verdict := "The link buffers under load — enable SQM/Smart Queues on this end to keep the queue short."
+	switch grade {
+	case "A+", "A", "B":
+		verdict = "Latency holds up under load here — this path is not your bufferbloat source."
+	}
+	tags := []string{"justrebootit", "underload", "bufferbloat", "target:" + label, "direction:" + ph.Direction}
+	if manual {
+		tags = append(tags, "manual")
+	}
+	annCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ann := grafana.Annotation{
+		Time: time.Now(),
+		Tags: tags,
+		Text: fmt.Sprintf("Bufferbloat grade %s on %s (%s): latency %s idle → %s under load (+%s) while pushing %.0f Mbps. %s",
+			grade, label, ph.Direction,
+			ph.Idle.Median.Round(time.Millisecond), ph.Loaded.Median.Round(time.Millisecond),
+			inc.Round(time.Millisecond), ph.Bps/1e6, verdict),
+	}
+	if err := gc.Post(annCtx, ann); err != nil {
+		log.Printf("underload %s/%s: posting annotation: %v", label, ph.Direction, err)
+	}
+}
+
+// handleUnderload kicks off an on-demand latency-under-load test against a
+// user-supplied IP/host (the dashboard "run a bufferbloat test" button). Like
+// the AI button it is rate-limited and asynchronous: the run takes ~10–25s and
+// its result lands as a Grafana annotation and the underload_* metrics, so this
+// returns 202 as soon as the job is accepted.
+func (a *app) handleUnderload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "use POST"})
+		return
+	}
+	if !a.cfg.Underload.Manual.Enabled {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "on-demand underload test is not enabled"})
+		return
+	}
+	host, direction := underloadRequest(r)
+	if host == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing host (enter an IP or hostname)"})
+		return
+	}
+	switch direction {
+	case "", "down", "up", "both":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "direction must be down, up, or both"})
+		return
+	}
+	if !a.allowUnderloadManual(time.Now()) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "rate limited; try again shortly"})
+		return
+	}
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		prober := a.newUnderloadProber(host, direction)
+		log.Printf("manual underload %s (direction=%s) started", host, direction)
+		a.reportUnderload(a.ctx, a.underloadGrafana(), host, prober.Run(a.ctx), true)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"host": host, "direction": direction})
+}
+
+// underloadRequest extracts host and direction from the request: query params, a
+// JSON body {"host":...,"direction":...}, or form fields, in that order.
+func underloadRequest(r *http.Request) (host, direction string) {
+	host = strings.TrimSpace(r.URL.Query().Get("host"))
+	direction = strings.TrimSpace(r.URL.Query().Get("direction"))
+	if host != "" {
+		return host, direction
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Host      string `json:"host"`
+			Direction string `json:"direction"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err == nil {
+			return strings.TrimSpace(body.Host), strings.TrimSpace(body.Direction)
+		}
+		return "", ""
+	}
+	_ = r.ParseForm()
+	return strings.TrimSpace(r.FormValue("host")), strings.TrimSpace(r.FormValue("direction"))
+}
+
+// allowUnderloadManual enforces the configured minimum interval and rolling
+// daily cap for on-demand underload runs (0 = unlimited), recording the run on
+// success so callers must only proceed when it returns true.
+func (a *app) allowUnderloadManual(now time.Time) bool {
+	cfg := a.cfg.Underload.Manual
+	a.ulManualMu.Lock()
+	defer a.ulManualMu.Unlock()
+
+	if cfg.DailyCap > 0 {
+		if a.ulManualDayStart.IsZero() || now.Sub(a.ulManualDayStart) >= 24*time.Hour {
+			a.ulManualDayStart = now
+			a.ulManualDayCount = 0
+		}
+		if a.ulManualDayCount >= cfg.DailyCap {
+			return false
+		}
+	}
+	if cfg.MinInterval > 0 && !a.ulManualLast.IsZero() && now.Sub(a.ulManualLast) < cfg.MinInterval {
+		return false
+	}
+	a.ulManualLast = now
+	a.ulManualDayCount++
+	return true
 }
 
 // env returns the value of an environment variable, or def when it is unset.

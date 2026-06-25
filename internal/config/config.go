@@ -68,6 +68,82 @@ type Config struct {
 	// Diagnostics configures the extra tests that fire when a latency spike or
 	// loss event is detected. See Diagnostics.
 	Diagnostics Diagnostics `yaml:"diagnostics"`
+
+	// Underload configures the latency-under-load (bufferbloat) probe. See
+	// Underload.
+	Underload Underload `yaml:"underload"`
+}
+
+// Underload configures the latency-under-load probe. A normal ping measures the
+// link while it is idle, which is exactly when bufferbloat is invisible: the
+// stutter that wrecks a Plex stream or video call happens only while the link
+// is saturated, when an oversized buffer fills and RTT balloons. This probe
+// deliberately saturates the link with a controlled transfer while pinging a
+// stable host, then publishes the idle-vs-loaded RTT difference — the
+// bufferbloat — as a metric. Because it generates real traffic it is opt-in and
+// bounded (a byte ceiling and a short duration per run).
+type Underload struct {
+	// Enabled turns the probe on. Off by default: it moves real data.
+	Enabled bool `yaml:"enabled"`
+	// Interval is how often a loaded-latency test runs. Keep it generous; each
+	// run briefly saturates the link.
+	Interval time.Duration `yaml:"interval"`
+	// Target is the label used for this probe's metrics (e.g. "uplink"). It is a
+	// name only, independent of the Targets list.
+	Target string `yaml:"target"`
+	// Host is the address pinged while the link is under load. A stable, nearby
+	// anchor (your gateway or 1.1.1.1) best isolates your own access link's
+	// queue; point it at the stream's far end to measure that whole path.
+	Host string `yaml:"host"`
+	// Direction selects which way to load the link: "down" (saturate the
+	// downlink), "up" (saturate the uplink), or "both" (measure each in turn).
+	// For a Plex server pushing video, the server's uplink ("up") is the usual
+	// culprit; for a client, the downlink.
+	Direction string `yaml:"direction"`
+	// Duration is how long each direction holds the link under load while
+	// sampling RTT.
+	Duration time.Duration `yaml:"duration"`
+	// Streams is the number of parallel transfer connections used to saturate
+	// the link. A handful is enough to fill a residential link.
+	Streams int `yaml:"streams"`
+	// DownURL / UpURL are the load endpoints. The defaults use Cloudflare's
+	// public speed-test endpoints, which are built for exactly this. DownURL is
+	// fetched with a bytes query parameter; UpURL receives a POST body.
+	DownURL string `yaml:"down_url"`
+	UpURL   string `yaml:"up_url"`
+	// Bytes caps the total data moved per direction per run, so a fast link
+	// can't run away with your data cap. The transfer also stops at Duration,
+	// whichever comes first.
+	Bytes int64 `yaml:"bytes"`
+	// Pings is the number of RTT samples taken in each phase (idle and loaded).
+	Pings int `yaml:"pings"`
+	// Timeout is the per-ping reply timeout.
+	Timeout time.Duration `yaml:"timeout"`
+	// BadIncrease is the loaded-vs-idle median RTT increase at or above which a
+	// run posts a Grafana annotation (0 disables annotations). 60ms ≈ a "C"
+	// bufferbloat grade — enough to be felt on a stream.
+	BadIncrease time.Duration `yaml:"bad_increase"`
+
+	// Manual configures the on-demand "run a bufferbloat test on this IP" button
+	// on the dashboard. It reuses the transfer settings above but takes its host
+	// from the request, so it works even when the scheduled probe (Enabled) is
+	// off. See ManualUnderload.
+	Manual ManualUnderload `yaml:"manual"`
+}
+
+// ManualUnderload controls the on-demand latency-under-load test a user triggers
+// from the dashboard (enter an IP, click "run"). Because each run saturates the
+// link with real traffic and the dashboard may be shared, it is rate-limited and
+// daily-capped.
+type ManualUnderload struct {
+	// Enabled turns the on-demand endpoint on. When false, the button's request
+	// is rejected with 503.
+	Enabled bool `yaml:"enabled"`
+	// MinInterval is the minimum time between manual runs; a click within the
+	// window is rejected with 429. 0 = unlimited.
+	MinInterval time.Duration `yaml:"min_interval"`
+	// DailyCap bounds manual runs per rolling 24h. 0 = unlimited.
+	DailyCap int `yaml:"daily_cap"`
 }
 
 // Discovery automatically promotes a path-diverse subset of a candidate pool to
@@ -252,6 +328,24 @@ func Default() Config {
 				DailyCap:    20,
 			},
 		},
+		Underload: Underload{
+			Enabled:     false, // opt-in: it moves real data
+			Interval:    15 * time.Minute,
+			Direction:   "down",
+			Duration:    12 * time.Second,
+			Streams:     4,
+			DownURL:     "https://speed.cloudflare.com/__down",
+			UpURL:       "https://speed.cloudflare.com/__up",
+			Bytes:       250_000_000, // ~250 MB ceiling per direction per run
+			Pings:       20,
+			Timeout:     2 * time.Second,
+			BadIncrease: 60 * time.Millisecond,
+			Manual: ManualUnderload{
+				Enabled:     true, // a click is explicit consent; the panel gates it
+				MinInterval: 30 * time.Second,
+				DailyCap:    20,
+			},
+		},
 	}
 }
 
@@ -336,6 +430,48 @@ func (c Config) Validate() error {
 		}
 		if c.Diagnostics.Workers < 1 {
 			return fmt.Errorf("diagnostics.workers must be >= 1, got %d", c.Diagnostics.Workers)
+		}
+	}
+	// The transfer settings are shared by the scheduled probe and the on-demand
+	// button, so validate them when either is active.
+	if c.Underload.Enabled || c.Underload.Manual.Enabled {
+		u := c.Underload
+		switch u.Direction {
+		case "down", "up", "both":
+		default:
+			return fmt.Errorf("underload.direction must be down|up|both, got %q", u.Direction)
+		}
+		if u.Streams < 1 {
+			return fmt.Errorf("underload.streams must be >= 1, got %d", u.Streams)
+		}
+		if u.Pings < 1 {
+			return fmt.Errorf("underload.pings must be >= 1, got %d", u.Pings)
+		}
+		// Each load phase needs room to ramp the link, then ping under load with
+		// the per-reply timeout as headroom — so the window must comfortably
+		// exceed the timeout.
+		if u.Timeout <= 0 || u.Timeout*2 >= u.Duration {
+			return fmt.Errorf("underload.timeout (%s) must be > 0 and well under underload.duration (%s)", u.Timeout, u.Duration)
+		}
+		if (u.Direction == "down" || u.Direction == "both") && u.DownURL == "" {
+			return fmt.Errorf("underload.down_url is required for direction %q", u.Direction)
+		}
+		if (u.Direction == "up" || u.Direction == "both") && u.UpURL == "" {
+			return fmt.Errorf("underload.up_url is required for direction %q", u.Direction)
+		}
+	}
+	// The scheduled probe additionally needs a fixed host, metric label, and
+	// interval (the on-demand button takes its host from the request).
+	if c.Underload.Enabled {
+		u := c.Underload
+		if u.Host == "" {
+			return fmt.Errorf("underload.host is required when underload is enabled")
+		}
+		if u.Target == "" {
+			return fmt.Errorf("underload.target (metric label) is required when underload is enabled")
+		}
+		if u.Interval <= 0 {
+			return fmt.Errorf("underload.interval must be > 0 when underload is enabled")
 		}
 	}
 	return nil

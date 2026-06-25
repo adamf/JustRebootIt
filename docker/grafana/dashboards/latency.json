@@ -34,6 +34,13 @@
         "iconColor": "orange",
         "name": "UDM config change",
         "target": { "type": "tags", "matchAny": false, "tags": ["config-change"], "limit": 100 }
+      },
+      {
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "iconColor": "yellow",
+        "name": "Bufferbloat",
+        "target": { "type": "tags", "matchAny": false, "tags": ["bufferbloat"], "limit": 100 }
       }
     ]
   },
@@ -849,6 +856,174 @@
         "onlyFromThisDashboard": false,
         "onlyInTimeRange": false,
         "tags": ["config-change"],
+        "limit": 20,
+        "showTags": true,
+        "showUser": false,
+        "showTime": true
+      }
+    },
+    {
+      "type": "row",
+      "id": 50,
+      "title": "Latency under load (bufferbloat) — streaming-stutter probe",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 96 }
+    },
+    {
+      "type": "timeseries",
+      "id": 51,
+      "title": "Latency: idle vs under load",
+      "description": "The bufferbloat probe saturates the link with a controlled transfer while pinging a stable host. 'idle' is the RTT before load, 'loaded' is during it, and 'increase' is the gap between them — the bufferbloat that causes streaming stutter. A large increase (tens to hundreds of ms) means the link buffers under load; the fix is usually SQM/Smart Queues on that end. Empty unless the underload probe is enabled in the config.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 97 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*increase.*" },
+            "properties": [
+              { "id": "custom.fillOpacity", "value": 30 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_rtt_idle_seconds",
+          "legendFormat": "{{target}} {{direction}} idle",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_rtt_loaded_seconds",
+          "legendFormat": "{{target}} {{direction}} loaded",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_rtt_increase_seconds",
+          "legendFormat": "{{target}} {{direction}} increase (bufferbloat)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 52,
+      "title": "Throughput under load",
+      "description": "Throughput achieved while the bufferbloat probe saturated the link, which is the context for the latency increase next to it (e.g. 'RTT tripled while pushing 35 Mbps up'). Empty unless the underload probe is enabled.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 97 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_throughput_bits_per_second",
+          "legendFormat": "{{target}} {{direction}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "volkovlabs-form-panel",
+      "id": 54,
+      "title": "Run a bufferbloat test on an IP",
+      "description": "Enter an IP (or hostname) and a direction, then run an on-demand latency-under-load test against it: the prober saturates the link in that direction while pinging the IP, and posts the idle-vs-loaded RTT (the bufferbloat) as an annotation and the underload_* metrics within ~10–25s. Proxied server-side through Grafana to the prober, so no prober port is exposed. Generates real traffic; rate-limited.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 106 },
+      "options": {
+        "sync": false,
+        "layout": { "variant": "single", "padding": 10 },
+        "saveDefault": { "variant": "hidden" },
+        "reset": { "variant": "hidden" },
+        "submit": { "variant": "primary", "text": "🚦 Run bufferbloat test", "icon": "play", "size": "md" },
+        "initial": { "method": "-" },
+        "updateEnabled": "auto",
+        "update": {
+          "method": "datasource",
+          "datasource": "justrebootit-prober",
+          "payloadMode": "all",
+          "confirm": false,
+          "payload": {
+            "refId": "A",
+            "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "justrebootit-prober" },
+            "type": "json",
+            "source": "url",
+            "parser": "backend",
+            "format": "table",
+            "root_selector": "",
+            "url": "http://prober:9430/api/underload",
+            "url_options": { "method": "POST", "body_type": "raw", "body_content_type": "application/json" }
+          }
+        },
+        "elements": [
+          {
+            "id": "host",
+            "uid": "host",
+            "title": "IP or hostname to test (e.g. your Plex peer's public IP)",
+            "type": "string",
+            "section": "",
+            "value": ""
+          },
+          {
+            "id": "direction",
+            "uid": "direction",
+            "title": "Direction — up saturates your uplink (Plex server), down your downlink (client)",
+            "type": "radio",
+            "section": "",
+            "value": "down",
+            "options": [
+              { "id": "down", "label": "down" },
+              { "id": "up", "label": "up" },
+              { "id": "both", "label": "both" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "annolist",
+      "id": 53,
+      "title": "Bufferbloat events",
+      "description": "Latency-under-load runs posted to the timeline (scheduled runs with a poor grade, plus every on-demand run from the button). Click an entry to jump to when it happened. Empty until a run occurs.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 106 },
+      "options": {
+        "onlyFromThisDashboard": false,
+        "onlyInTimeRange": false,
+        "tags": ["bufferbloat"],
         "limit": 20,
         "showTags": true,
         "showUser": false,
