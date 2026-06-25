@@ -358,19 +358,24 @@ of identical investigations. To prevent that, each event gets a cheap
   targets trip within **`shared_window`** — one investigation, not one per target;
 - a global **`min_interval`** (default 3m) and **`daily_budget`** (default 50)
   cap spend even across distinct signatures;
-- **distant problems are suppressed harder.** A target reached in more than
-  **`far_hops`** (default 3) is "far" — a remote outage isn't *our* internet
-  problem — so its analysis is reused for **`far_repeat_ttl`** (default 12h)
-  instead of the normal `repeat_ttl`.
+- **isolated distant problems are skipped entirely.** A target reached in more
+  than **`far_hops`** (default 3) that acts up *while every other path stays
+  healthy* is "far" — a single remote IP spiking or going dark isn't *our*
+  internet problem — so with **`skip_far`** on (default) it takes **no API call
+  at all** (counted as `exogenous` in `diagnostic_ai_suppressed_total`); the red
+  trigger marker still records it on the timeline. Set `skip_far: false` to
+  investigate far problems anyway (with the cheaper model and a `far_repeat_ttl`
+  reuse window of 12h instead of the normal `repeat_ttl`).
 
 **Cheap vs. expensive model, learned per problem.** With **`model_eval`** on
 (default), each problem *class* (`reason` + shared/near/far) is evaluated: its
 first **`eval_samples`** (default 3) events run **both** `model` (Opus) and
 `model_cheap` (Sonnet), and a tiny judge call decides whether the cheaper one
 reached the same root cause. Once a majority agree, the class **locks in the
-cheaper model**; otherwise it keeps the expensive one. **Far problems always use
-the cheap model** (no eval). Set `model_eval: false` to just use Opus for
-near/shared and Sonnet for far. Which model ran each investigation is in
+cheaper model**; otherwise it keeps the expensive one. **Far problems that are
+investigated at all** (i.e. when `skip_far: false`) **always use the cheap
+model** (no eval). Set `model_eval: false` to just use Opus for near/shared and
+Sonnet for far. Which model ran each investigation is in
 `diagnostic_ai_model_used_total{model}`.
 
 Every trigger is still recorded (`diagnostic_triggered_total`, the red markers),

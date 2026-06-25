@@ -29,6 +29,12 @@ type CoalescerConfig struct {
 	FarHops int
 	// FarTTL is the (longer) reuse window for far problems.
 	FarTTL time.Duration
+	// SkipFar, when true, skips the AI entirely for an isolated far event (a
+	// single distant target spiking or going dark while everything else is fine)
+	// — that's almost certainly the far end's problem, not ours, so it isn't
+	// worth an LLM call. When false, far problems are still investigated (with
+	// the cheaper model and the longer FarTTL reuse window).
+	SkipFar bool
 }
 
 // Decision is the outcome of evaluating an event for investigation.
@@ -105,6 +111,15 @@ func (c *Coalescer) Decide(ev Event, now time.Time) Decision {
 
 	scope := c.scope(ev, len(distinct))
 	sig := c.signature(ev, scope)
+
+	// Heuristic short-circuit: an isolated far event (one distant target acting
+	// up while every other path is healthy) is the far end's problem, not ours —
+	// classify it cheaply and skip the LLM entirely. No mechanical diagnostics or
+	// AI run; the trigger is still recorded, so the dashboard marker stays honest.
+	if scope == "far" && c.cfg.SkipFar {
+		return Decision{Signature: sig, ScopeKind: scope, Skip: "exogenous"}
+	}
+
 	// Far problems get a much longer reuse window: a distant outage isn't our
 	// internet problem and doesn't need re-investigating for hours.
 	ttl := c.cfg.RepeatTTL
