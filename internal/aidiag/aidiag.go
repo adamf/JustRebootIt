@@ -12,6 +12,7 @@ package aidiag
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -164,6 +165,10 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 		return Analysis{}, err
 	}
 
+	// ttl1h keeps the cached prefix warm across investigations spaced minutes-to-
+	// an-hour apart (the coalescer makes them sparse), not just within one run.
+	ttl1h := anthropic.BetaCacheControlEphemeralParam{TTL: anthropic.BetaCacheControlEphemeralTTLTTL1h}
+
 	runner := a.client.Beta.Messages.NewToolRunner(tools, anthropic.BetaToolRunnerParams{
 		BetaMessageNewParams: anthropic.BetaMessageNewParams{
 			Model:     anthropic.Model(model),
@@ -172,12 +177,17 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 			Thinking: anthropic.BetaThinkingConfigParamUnion{
 				OfAdaptive: &anthropic.BetaThinkingConfigAdaptiveParam{},
 			},
-			// The system prompt and tool list are byte-stable across events, so
-			// cache them; only the per-event user message varies.
+			// Two cache breakpoints. The system block caches the (byte-stable)
+			// tool list + system prompt — only the per-event user message varies.
 			System: []anthropic.BetaTextBlockParam{{
 				Text:         systemPrompt,
-				CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
+				CacheControl: ttl1h,
 			}},
+			// The agentic loop re-sends the whole growing conversation every
+			// iteration; the top-level cache_control auto-places a breakpoint on
+			// the last block each turn, so iteration N reads iterations 1..N-1
+			// (incl. large tool results) from cache instead of reprocessing them.
+			CacheControl: ttl1h,
 			Messages: []anthropic.BetaMessageParam{
 				anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(userPrompt(ev))),
 			},
@@ -189,6 +199,13 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 	if err != nil {
 		return Analysis{}, fmt.Errorf("agent run: %w", err)
 	}
+
+	// Log cache effectiveness so the hit rate is observable: cache_read should
+	// dominate input on a multi-iteration run; if it stays 0, a prefix
+	// invalidator is at work.
+	u := msg.Usage
+	log.Printf("ai diagnosis #%d %s [model=%s]: tokens input=%d cache_read=%d cache_write=%d output=%d",
+		ev.ID, ev.Target, model, u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens, u.OutputTokens)
 
 	var sb strings.Builder
 	for _, block := range msg.Content {

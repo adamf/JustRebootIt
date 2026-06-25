@@ -409,6 +409,18 @@ model** (no eval). Set `model_eval: false` to just use Opus for near/shared and
 Sonnet for far. Which model ran each investigation is in
 `diagnostic_ai_model_used_total{model}`.
 
+**Prompt caching cuts the per-investigation token cost.** The system prompt and
+tool list are byte-stable across events, so they're cached once and *read* (at
+~0.1× price) on every iteration of an investigation's tool-use loop; the growing
+conversation is cached incrementally too, so a 12-step investigation re-reads its
+earlier tool results instead of reprocessing them. A 1-hour cache TTL keeps that
+prefix warm across investigations spaced up to an hour apart. Each investigation
+logs its token breakdown (`tokens input=… cache_read=… cache_write=… output=…`)
+so you can confirm `cache_read` dominates — if it's persistently 0, something is
+invalidating the cached prefix. (Note: caches are per-model, so the `model_eval`
+A/B phase pays a separate cache write for each of the two models until a class
+settles on one.)
+
 Every trigger is still recorded (`diagnostic_triggered_total`, the red markers),
 so nothing is hidden — only the *paid investigations* are deduplicated. Reused /
 throttled events are counted in `diagnostic_ai_suppressed_total{reason}`. Tune
