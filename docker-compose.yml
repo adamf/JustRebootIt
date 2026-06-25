@@ -38,9 +38,12 @@ services:
       GRAFANA_USER: admin
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
-      # Override the baked-in targets with your own copy. Edit config/targets.yml
-      # (at least the home-gateway IP) before bringing the stack up.
-      - ./config/targets.yml:/etc/justrebootit/targets.yml:ro
+      # Mount the whole config dir so the prober sees both the shipped
+      # targets.yml and an optional, gitignored overrides.yml layered on top of
+      # it (your gateway IP, extra targets) — local changes a deploy won't
+      # clobber. Edit config/targets.yml (at least the home-gateway IP), or keep
+      # it pristine and put your changes in config/overrides.yml.
+      - ./config:/etc/justrebootit:ro
     restart: unless-stopped
     networks: [monitoring]
 

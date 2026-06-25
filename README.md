@@ -171,6 +171,33 @@ trace_max_hops: 30
 trace_timeout: 2s
 ```
 
+### Local overrides — `config/overrides.yml` (deploy-safe)
+
+`config/targets.yml` is tracked in the repo, so editing it directly means a
+`git pull` (or image rebuild) can clobber your changes. To keep local
+customizations safe, drop a **gitignored `config/overrides.yml`** next to it —
+the prober auto-loads it and **layers it on top** of the shipped config:
+
+- any scalar/nested field you set **overrides** the default (`pings`,
+  `diagnostics.*`, `underload.host`, …);
+- the `targets` and `discovery.candidates` lists are **merged by name** — an
+  entry whose `name` matches a shipped one **replaces just that target** (e.g.
+  point `home-gateway` at your real LAN IP), and a new `name` is **appended**.
+
+You only write what you change; everything else keeps the shipped config (and
+picks up future default improvements). Get started from the committed template:
+
+```sh
+cp config/overrides.example.yml config/overrides.yml
+$EDITOR config/overrides.yml         # set your gateway IP, add your targets
+docker compose restart prober
+```
+
+The whole `config/` directory is mounted into the prober, so both files are
+visible; `overrides.yml` is in `.gitignore`. (You can also point `-overrides` at
+an explicit path; the default is a sibling `overrides.yml`, applied only if
+present.)
+
 ### Path discovery — diverse, short routes (automatic)
 
 Probing a dozen destinations that all leave your house the same way is mostly

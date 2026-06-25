@@ -1,0 +1,42 @@
+# JustRebootIt local overrides — EXAMPLE / TEMPLATE.
+#
+# Copy this to config/overrides.yml and edit it. That file is gitignored, so a
+# `git pull` or image rebuild will never clobber your local changes — unlike
+# editing config/targets.yml directly. The prober auto-loads a sibling
+# overrides.yml (next to targets.yml) if present.
+#
+#   cp config/overrides.example.yml config/overrides.yml
+#   $EDITOR config/overrides.yml
+#   docker compose restart prober
+#
+# How merging works:
+#   - Any scalar or nested field you set here OVERRIDES the shipped default
+#     (e.g. pings, diagnostics.*, underload.host).
+#   - The `targets` and `discovery.candidates` lists are merged BY NAME:
+#       * an entry whose `name` matches a shipped target REPLACES just that one
+#         (e.g. point home-gateway at your real LAN IP), and
+#       * an entry with a new `name` is APPENDED (add your own targets).
+#     You only write what you change; everything else keeps the shipped config.
+
+# --- Point the shipped gateway target at your real LAN IP --------------------
+# (Same name "home-gateway" => replaces that entry; everything else is untouched.)
+targets:
+  - name: home-gateway
+    host: 192.168.1.1     # <-- your gateway's LAN IP
+    group: gateway
+    trace: false
+
+  # --- Add your own targets (new names => appended) --------------------------
+  # e.g. the streaming/Plex peer you want to watch, with traceroutes on:
+  # - name: plex-peer
+  #   host: 203.0.113.40
+  #   group: streaming
+  #   trace: true
+
+# --- Override any scalar/nested knob (examples; delete what you don't need) ---
+# pings: 30                 # smoother smoke
+# underload:                # turn on the scheduled bufferbloat probe at your host
+#   enabled: true
+#   target: uplink
+#   host: 203.0.113.40
+#   direction: up

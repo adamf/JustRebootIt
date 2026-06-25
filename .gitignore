@@ -1,6 +1,12 @@
 # Local secrets / runtime config — never commit the gateway password.
 .env
 
+# Local config overrides — your gateway IP, extra targets, etc. Layered on top
+# of the shipped config/targets.yml so a deploy / git pull won't clobber them.
+# Committed template: config/overrides.example.yml.
+/config/overrides.yml
+/config/overrides.yaml
+
 # Compiled binaries.
 /prober
 /udmexporter

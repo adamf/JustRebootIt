@@ -17,6 +17,120 @@ func writeTemp(t *testing.T, body string) string {
 	return p
 }
 
+// writeBoth writes a targets.yml and a sibling overrides.yml in the same temp
+// dir and returns the targets.yml path, so Load auto-discovers the overrides.
+func writeBoth(t *testing.T, base, overrides string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "targets.yml")
+	if err := os.WriteFile(p, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "overrides.yml"), []byte(overrides), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestOverridesAdditiveMerge(t *testing.T) {
+	base := `
+pings: 20
+targets:
+  - name: home-gateway
+    host: 192.168.1.1
+    group: gateway
+  - name: cloudflare
+    host: 1.1.1.1
+    group: anchor
+`
+	overrides := `
+pings: 30
+targets:
+  - name: home-gateway
+    host: 10.0.0.1
+    group: gateway
+  - name: plex-peer
+    host: 203.0.113.40
+    group: streaming
+    trace: true
+`
+	cfg, err := Load(writeBoth(t, base, overrides))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Scalar overridden.
+	if cfg.Pings != 30 {
+		t.Errorf("Pings = %d, want 30 from overrides", cfg.Pings)
+	}
+	// Same-name target replaced in place; new-name target appended; others kept.
+	byName := map[string]Target{}
+	for _, tg := range cfg.Targets {
+		byName[tg.Name] = tg
+	}
+	if len(cfg.Targets) != 3 {
+		t.Fatalf("got %d targets, want 3: %+v", len(cfg.Targets), cfg.Targets)
+	}
+	if byName["home-gateway"].Host != "10.0.0.1" {
+		t.Errorf("home-gateway host = %q, want 10.0.0.1 (replaced)", byName["home-gateway"].Host)
+	}
+	if byName["cloudflare"].Host != "1.1.1.1" {
+		t.Errorf("cloudflare host = %q, want 1.1.1.1 (untouched)", byName["cloudflare"].Host)
+	}
+	if p, ok := byName["plex-peer"]; !ok || !p.Trace || p.Group != "streaming" {
+		t.Errorf("plex-peer not appended correctly: %+v", p)
+	}
+}
+
+func TestOverridesMissingFileIsNoOp(t *testing.T) {
+	// writeTemp creates only targets.yml; the sibling overrides.yml is absent.
+	cfg, err := Load(writeTemp(t, `
+targets:
+  - name: a
+    host: 1.1.1.1
+`))
+	if err != nil {
+		t.Fatalf("load without overrides should succeed: %v", err)
+	}
+	if cfg.Pings != 20 {
+		t.Errorf("defaults should still apply, Pings = %d", cfg.Pings)
+	}
+}
+
+func TestOverridesExplicitMissingIsError(t *testing.T) {
+	base := writeTemp(t, "targets:\n  - {name: a, host: 1.1.1.1}\n")
+	if _, err := LoadWithOverrides(base, filepath.Join(t.TempDir(), "nope.yml")); err == nil {
+		t.Error("an explicitly named, missing overrides file should error")
+	}
+}
+
+func TestOverridesMergeCandidatesByName(t *testing.T) {
+	base := `
+targets:
+  - name: a
+    host: 1.1.1.1
+discovery:
+  enabled: true
+  candidates:
+    - { name: c1, host: 9.9.9.9 }
+`
+	overrides := `
+discovery:
+  candidates:
+    - { name: c2, host: 8.8.4.4 }
+`
+	cfg, err := Load(writeBoth(t, base, overrides))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	names := map[string]bool{}
+	for _, c := range cfg.Discovery.Candidates {
+		names[c.Name] = true
+	}
+	if !names["c1"] || !names["c2"] {
+		t.Errorf("candidates should merge by name, got %+v", cfg.Discovery.Candidates)
+	}
+}
+
 func TestLoadAppliesDefaults(t *testing.T) {
 	p := writeTemp(t, `
 targets:
