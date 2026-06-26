@@ -1138,6 +1138,97 @@
         "showUser": false,
         "showTime": true
       }
+    },
+    {
+      "type": "row",
+      "id": 59,
+      "title": "AI investigation cost",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 121 }
+    },
+    {
+      "type": "timeseries",
+      "id": 60,
+      "title": "AI tokens used by model",
+      "description": "Tokens consumed by AI root-cause investigations, summed per Claude model. cache_read tokens are billed at ~0.1x and cache_write at ~1.25-2x of input, so a model whose bar is mostly cache_read is cheap. Empty unless ANTHROPIC_API_KEY is set. Use this to watch spend and see whether a class has settled on the cheaper model.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 122 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "sum by (model) (increase(diagnostic_ai_tokens_total[$__rate_interval]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 62,
+      "title": "AI tokens by kind (cache effectiveness)",
+      "description": "The same AI tokens split by kind across all models: input (full price), cache_read (~0.1x), cache_write (~1.25-2x), output. A healthy, well-cached agent shows cache_read dominating input. Empty unless ANTHROPIC_API_KEY is set.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 122 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "sum by (kind) (increase(diagnostic_ai_tokens_total[$__rate_interval]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "annolist",
+      "id": 61,
+      "title": "Events with no LLM call (cost saved)",
+      "description": "Incidents that fired but did NOT trigger an AI investigation — reused a prior analysis (repeat), classified as a distant/exogenous problem, or hit a rate/budget limit. Tagged llm_not_used + the reason. Rate-limited to avoid flooding, so this is a sample, not every suppressed event — the full count is in diagnostic_ai_suppressed_total.",
+      "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 131 },
+      "options": {
+        "onlyFromThisDashboard": false,
+        "onlyInTimeRange": false,
+        "tags": ["llm-skipped"],
+        "limit": 20,
+        "showTags": true,
+        "showUser": false,
+        "showTime": true
+      }
     }
   ]
 }

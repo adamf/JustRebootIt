@@ -49,6 +49,7 @@ type Metrics struct {
 	aiSuppressed   *prometheus.CounterVec
 	aiModelUsed    *prometheus.CounterVec
 	aiEvalRuns     prometheus.Counter
+	aiTokens       *prometheus.CounterVec
 
 	ulIdle       *prometheus.GaugeVec
 	ulLoaded     *prometheus.GaugeVec
@@ -188,6 +189,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "diagnostic_ai_eval_runs_total",
 			Help: "Count of dual-model evaluation runs (cheap vs expensive + judge).",
 		}),
+		aiTokens: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "diagnostic_ai_tokens_total",
+			Help: "AI investigation tokens by model and kind (input|cache_read|cache_write|output). cache_read is billed ~0.1x, cache_write ~1.25-2x.",
+		}, []string{"model", "kind"}),
 
 		ulIdle: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "underload_rtt_idle_seconds",
@@ -247,7 +252,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
-		m.aiModelUsed, m.aiEvalRuns,
+		m.aiModelUsed, m.aiEvalRuns, m.aiTokens,
 		m.ulIdle, m.ulLoaded, m.ulIncrease, m.ulRatio, m.ulThroughput, m.ulLoss,
 		m.ulManualRunning, m.ulManualLastInc, m.ulManualLastIdle,
 		m.ulManualLastLoaded, m.ulManualLastBps, m.ulManualLastLoss,
@@ -344,6 +349,15 @@ func (m *Metrics) AIModelUsed(model string) { m.aiModelUsed.WithLabelValues(mode
 
 // AIEvalRun records a dual-model evaluation run.
 func (m *Metrics) AIEvalRun() { m.aiEvalRuns.Inc() }
+
+// AITokens records the token usage of one investigation, by model and kind, so
+// the dashboard can graph AI spend per model.
+func (m *Metrics) AITokens(model string, input, cacheRead, cacheWrite, output int64) {
+	m.aiTokens.WithLabelValues(model, "input").Add(float64(input))
+	m.aiTokens.WithLabelValues(model, "cache_read").Add(float64(cacheRead))
+	m.aiTokens.WithLabelValues(model, "cache_write").Add(float64(cacheWrite))
+	m.aiTokens.WithLabelValues(model, "output").Add(float64(output))
+}
 
 // ObserveUnderload publishes one direction's latency-under-load result. The
 // idle/loaded medians and throughput are only set when the loaded phase

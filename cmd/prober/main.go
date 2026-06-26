@@ -207,6 +207,11 @@ type app struct {
 	ulManualLast     time.Time
 	ulManualDayStart time.Time
 	ulManualDayCount int
+
+	// skipAnnotate rate-limits the "no LLM call" annotations so a storm of
+	// suppressed events can't flood the dashboard (the metric counts them all).
+	skipAnnotateMu   sync.Mutex
+	skipAnnotateLast time.Time
 }
 
 // allowManual reports whether a manual investigation may run now, enforcing the
@@ -481,6 +486,7 @@ func (a *app) maybeDiagnose(t config.Target, res pinger.Result) {
 			} else {
 				log.Printf("diagnostic #%d %s: skipping AI (%s, scope=%s)", trig.EventID, t.Name, dec.Skip, dec.ScopeKind)
 			}
+			a.annotateSkipped(trig.EventID, t.Name, dec)
 			return
 		}
 		trig.Signature = dec.Signature
@@ -586,23 +592,32 @@ func (a *app) analyze(ev aidiag.Event) {
 
 	var res aidiag.Analysis
 	var err error
+	var evaluated bool
+	// recordOne meters a single-model investigation (the eval path meters both
+	// models itself, inside evalModels).
+	recordOne := func(r aidiag.Analysis) {
+		a.m.AIModelUsed(r.Model)
+		u := r.Usage
+		a.m.AITokens(r.Model, u.Input, u.CacheRead, u.CacheWrite, u.Output)
+	}
 	switch {
 	case ev.Reason == "manual":
 		// User-triggered: always investigate with the configured model and skip
 		// the cheap-vs-expensive evaluation (don't double-spend on a click).
 		res, err = a.analyzer.Analyze(a.ctx, ev, a.analyzer.ExpensiveModel())
 		if err == nil {
-			a.m.AIModelUsed(res.Model)
+			recordOne(res)
 		}
 	default:
 		class := ev.Reason + "|" + ev.ScopeKind
 		plan := a.selector.Plan(class, ev.ScopeKind)
 		if plan.Eval {
+			evaluated = true
 			res, err = a.evalModels(ev, class)
 		} else {
 			res, err = a.analyzer.Analyze(a.ctx, ev, plan.Model)
 			if err == nil {
-				a.m.AIModelUsed(res.Model)
+				recordOne(res)
 			}
 		}
 	}
@@ -630,17 +645,35 @@ func (a *app) analyze(ev aidiag.Event) {
 		fmt.Sprintf("event:%d", ev.ID),
 		"target:" + ev.Target,
 		"reason:" + ev.Reason,
+		// LLM accounting, so each incident carries its model/cost/cache state.
+		"llm_used",
+		"model:" + res.Model,
+		fmt.Sprintf("tokens:%d", res.Usage.Total()),
+	}
+	if res.Usage.CacheHit() {
+		tags = append(tags, "llm_cache_hit")
+	} else {
+		tags = append(tags, "llm_cache_miss")
+	}
+	if evaluated {
+		tags = append(tags, "model_eval")
 	}
 	if ev.Reason == "manual" {
 		tags = append(tags, "manual")
 	}
 	// res.Text already opens with the one-sentence root cause (res.Headline is a
 	// copy of that first line), so don't prepend the headline again — that just
-	// duplicated the whole sentence in the annotation.
+	// duplicated the whole sentence in the annotation. A compact footer records
+	// the model and token cost inline for the annotation-list readout.
+	cacheState := "cache miss"
+	if res.Usage.CacheHit() {
+		cacheState = fmt.Sprintf("%d cached", res.Usage.CacheRead)
+	}
 	ann := grafana.Annotation{
 		Time: ev.When,
 		Tags: tags,
-		Text: fmt.Sprintf("Event #%d (%s) — %s", ev.ID, ev.Target, res.Text),
+		Text: fmt.Sprintf("Event #%d (%s) — %s\n\n[%s · %d tokens · %s]",
+			ev.ID, ev.Target, res.Text, res.Model, res.Usage.Total(), cacheState),
 	}
 	if err := a.grafana.Post(annCtx, ann); err != nil {
 		log.Printf("ai diagnosis #%d: posting annotation: %v", ev.ID, err)
@@ -672,6 +705,8 @@ func (a *app) evalModels(ev aidiag.Event, class string) (aidiag.Analysis, error)
 	for _, r := range []result{exp, cheap} {
 		if r.err == nil {
 			a.m.AIModelUsed(r.an.Model)
+			u := r.an.Usage
+			a.m.AITokens(r.an.Model, u.Input, u.CacheRead, u.CacheWrite, u.Output)
 		}
 	}
 	switch {
@@ -691,7 +726,53 @@ func (a *app) evalModels(ev aidiag.Event, class string) (aidiag.Analysis, error)
 	if decided, chosen := a.selector.Record(class, agree); decided {
 		log.Printf("model eval: class %q decided -> %s (cheap agreed=%t on final sample)", class, chosen, agree)
 	}
-	return exp.an, nil
+	// Surface the expensive analysis, but report the event's full token cost
+	// (both models ran) so the annotation's tokens tag isn't an undercount.
+	out := exp.an
+	out.Usage = exp.an.Usage.Add(cheap.an.Usage)
+	return out, nil
+}
+
+// annotateSkipped records a cost-saving decision — an event that did NOT trigger
+// an LLM call — as a lightweight annotation tagged llm_not_used + the reason, so
+// the "no-LLM events" panel shows what was suppressed and why. It uses a distinct
+// tag (not ai-diagnosis), so it doesn't add markers to the latency graphs, runs
+// async so it never blocks the probe loop, and is globally rate-limited so a
+// storm of suppressed events can't flood the panel (the metric counts them all).
+func (a *app) annotateSkipped(eventID int64, target string, dec aidiag.Decision) {
+	if a.grafana == nil {
+		return
+	}
+	a.skipAnnotateMu.Lock()
+	now := time.Now()
+	if !a.skipAnnotateLast.IsZero() && now.Sub(a.skipAnnotateLast) < 30*time.Second {
+		a.skipAnnotateMu.Unlock()
+		return
+	}
+	a.skipAnnotateLast = now
+	a.skipAnnotateMu.Unlock()
+
+	text := fmt.Sprintf("Event #%d (%s): no LLM call — %s", eventID, target, dec.Skip)
+	if dec.Skip == "repeat" && dec.PriorEventID > 0 {
+		text += fmt.Sprintf(" (reused analysis #%d)", dec.PriorEventID)
+	}
+	tags := []string{
+		"justrebootit", "llm-skipped", "llm_not_used",
+		"reason:" + dec.Skip, "target:" + target, fmt.Sprintf("event:%d", eventID),
+	}
+	if dec.ScopeKind != "" {
+		tags = append(tags, "scope:"+dec.ScopeKind)
+	}
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+		defer cancel()
+		if err := a.grafana.Post(ctx, grafana.Annotation{Time: now, Tags: tags, Text: text}); err != nil {
+			log.Printf("llm-skipped annotation #%d: %v", eventID, err)
+		}
+	}()
 }
 
 // runDiscovery periodically traces the candidate pool, selects a path-diverse
