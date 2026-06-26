@@ -426,6 +426,17 @@ so nothing is hidden — only the *paid investigations* are deduplicated. Reused
 throttled events are counted in `diagnostic_ai_suppressed_total{reason}`. Tune
 the knobs under `diagnostics.ai` in `config/targets.yml`.
 
+**Each incident is tagged with its LLM accounting.** An investigated event's
+annotation carries `llm_used`, `model:<id>`, `tokens:<n>`, `llm_cache_hit` or
+`llm_cache_miss`, and `model_eval` (when both models ran), plus a `[model · n
+tokens · cache state]` footer. Events that did *not* call the LLM (reused,
+exogenous, rate-limited, budget) get a lightweight `llm_not_used` annotation with
+the reason, surfaced in the **"Events with no LLM call"** panel at the bottom —
+these are rate-limited so a storm can't flood the dashboard (the full count
+stays in `diagnostic_ai_suppressed_total`). The bottom **"AI investigation
+cost"** row graphs `diagnostic_ai_tokens_total` by model and by kind, so you can
+watch spend and confirm `cache_read` dominates.
+
 The agent posts annotations using the Grafana admin account
 (`GRAFANA_ADMIN_PASSWORD` from `.env`) over the internal Docker network; no
 ports are exposed for this.
@@ -544,6 +555,7 @@ Prober (`:9430/metrics`):
 | `diagnostic_ai_suppressed_total{reason}` | events that reused a prior analysis or were throttled (repeat/rate-limited/budget/manual-throttled) |
 | `diagnostic_ai_model_used_total{model}` | investigations by the model that produced the analysis |
 | `diagnostic_ai_eval_runs_total` | dual-model evaluation runs (cheap vs expensive + judge) |
+| `diagnostic_ai_tokens_total{model,kind}` | AI tokens by model and kind (input/cache_read/cache_write/output) — powers the "AI investigation cost" graphs |
 | `underload_rtt_idle_seconds{target,direction}` / `_loaded_seconds` | median RTT idle vs under load, last latency-under-load run |
 | `underload_rtt_increase_seconds{target,direction}` | loaded − idle median RTT (the bufferbloat) |
 | `underload_bufferbloat_ratio{target,direction}` | loaded median RTT as a multiple of idle |
