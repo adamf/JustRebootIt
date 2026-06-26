@@ -95,6 +95,28 @@ type Analysis struct {
 	Text string
 	// Model is the Claude model that produced this analysis.
 	Model string
+	// Usage is the token accounting for the investigation that produced this
+	// analysis, so callers can tag the annotation and meter spend.
+	Usage Usage
+}
+
+// Usage is the token accounting for one investigation.
+type Usage struct {
+	Input      int64
+	CacheRead  int64
+	CacheWrite int64
+	Output     int64
+}
+
+// Total is all tokens that flowed through the request (cached + uncached + out).
+func (u Usage) Total() int64 { return u.Input + u.CacheRead + u.CacheWrite + u.Output }
+
+// CacheHit reports whether any of the prompt prefix was served from cache.
+func (u Usage) CacheHit() bool { return u.CacheRead > 0 }
+
+// Add accumulates another usage into this one (used to sum a dual-model eval).
+func (u Usage) Add(o Usage) Usage {
+	return Usage{u.Input + o.Input, u.CacheRead + o.CacheRead, u.CacheWrite + o.CacheWrite, u.Output + o.Output}
 }
 
 // Analyzer investigates events with a Claude agent.
@@ -203,9 +225,14 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 	// Log cache effectiveness so the hit rate is observable: cache_read should
 	// dominate input on a multi-iteration run; if it stays 0, a prefix
 	// invalidator is at work.
-	u := msg.Usage
+	usage := Usage{
+		Input:      msg.Usage.InputTokens,
+		CacheRead:  msg.Usage.CacheReadInputTokens,
+		CacheWrite: msg.Usage.CacheCreationInputTokens,
+		Output:     msg.Usage.OutputTokens,
+	}
 	log.Printf("ai diagnosis #%d %s [model=%s]: tokens input=%d cache_read=%d cache_write=%d output=%d",
-		ev.ID, ev.Target, model, u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens, u.OutputTokens)
+		ev.ID, ev.Target, model, usage.Input, usage.CacheRead, usage.CacheWrite, usage.Output)
 
 	var sb strings.Builder
 	for _, block := range msg.Content {
@@ -222,6 +249,7 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 		Headline: headline(text),
 		Text:     stripMarkdown(text),
 		Model:    model,
+		Usage:    usage,
 	}, nil
 }
 
