@@ -579,6 +579,16 @@ and uses it two ways:
   Smart Queues, but I already did" problem — the agent checks what's actually
   configured first, and instead reasons about whether the *configured* shaper
   rate is set too high for the real line, or whether the cause is elsewhere.
+  The agent's prompt is also grounded in real **bufferbloat rules** so it
+  doesn't loop on "lower the upload cap": it must confirm a direction was
+  actually **saturated** during the spike (else it's not bufferbloat), it knows
+  there's a **floor** (~85–90% of line rate — below that, lowering the cap only
+  wastes bandwidth, so it won't recommend it), and it knows the UDM Pro can't
+  shape a gigabit download (Smart Queues disables hardware offload and is
+  CPU-bound to a few hundred Mbps). Give it your specifics with
+  **`diagnostics.ai.context`** in `config/targets.yml` (your plan's line rates,
+  gateway model, and what's already configured) so it computes "90% of your 35
+  Mbps upload" exactly and stops re-recommending a fix that's already in place.
 - It **watches that config for changes** (every `UDM_CONFIG_INTERVAL`, default
   5m). When a setting changes, it posts an orange **config-change annotation**
   to Grafana describing exactly what changed (`wan_smartq_enabled: false → true`)
