@@ -661,6 +661,13 @@ it will log auth failures and report `udm_up 0` without affecting anything else.
   traceroutes as everything else, so it needs `NET_RAW` (see above). It also only
   runs its first pass at startup and then every `discovery.interval`; give it a
   moment. With no `candidates` configured it stays dormant by design.
+- **The dashboard doesn't reflect a `git pull` / dashboard edit** → the dashboard
+  is provisioned from `docker/grafana/dashboards/latency.json` as the source of
+  truth and re-scanned every 30s, so changes normally appear within a minute. If
+  it's stuck on an old version, restart Grafana to force a re-import:
+  `docker compose restart grafana` (or `docker compose up -d --force-recreate
+  grafana`). Because the file is authoritative, panel edits made in the Grafana
+  UI are not persisted — change the JSON instead.
 - **The "Run a bufferbloat test" button doesn't seem to do anything** → the
   button now *waits* for the test (~10–25s) and shows a success notification with
   the result, but if you're unsure it's running, the prober logs every request:
