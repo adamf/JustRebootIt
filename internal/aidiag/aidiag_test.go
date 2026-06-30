@@ -144,3 +144,31 @@ func TestRDAPOrgExtraction(t *testing.T) {
 		t.Errorf("rdapOrg = %q, want the Comcast org name", got)
 	}
 }
+
+func TestBuildSystemPrompt(t *testing.T) {
+	// No context: the base prompt is returned unchanged (byte-stable for cache).
+	if got := buildSystemPrompt(""); got != systemPrompt {
+		t.Error("empty context should return the base prompt unchanged")
+	}
+	if got := buildSystemPrompt("  \n "); got != systemPrompt {
+		t.Error("whitespace-only context should return the base prompt unchanged")
+	}
+	// With context: appended after the base prompt.
+	ctx := "Comcast 1.2 Gbps down / 35 Mbps up, UDM Pro, SQM upload already 32 Mbps"
+	got := buildSystemPrompt(ctx)
+	if !strings.HasPrefix(got, systemPrompt) {
+		t.Error("built prompt should start with the base prompt")
+	}
+	if !strings.Contains(got, ctx) {
+		t.Error("built prompt should contain the operator context")
+	}
+}
+
+func TestSystemPromptBufferbloatGuidance(t *testing.T) {
+	// Guard the anti-doom-loop guidance so it can't be silently dropped.
+	for _, want := range []string{"SATURATED", "FLOOR", "NEVER recommend lowering", "hardware offload"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("system prompt missing bufferbloat guidance %q", want)
+		}
+	}
+}

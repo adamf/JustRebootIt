@@ -82,6 +82,7 @@ func main() {
 			BaseURL:        os.Getenv("ANTHROPIC_BASE_URL"),
 			Model:          cfg.Diagnostics.AI.Model,
 			ModelCheap:     cfg.Diagnostics.AI.ModelCheap,
+			Context:        cfg.Diagnostics.AI.Context,
 			MaxIterations:  cfg.Diagnostics.AI.MaxIterations,
 			PrometheusURL:  env("JRI_PROMETHEUS_URL", "http://prometheus:9090"),
 			UDMExporterURL: env("UDM_EXPORTER_URL", "http://udm-exporter:9431"),

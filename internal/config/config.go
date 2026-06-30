@@ -244,6 +244,12 @@ type AIDiagnostics struct {
 	Model string `yaml:"model"`
 	// MaxIterations bounds the agent's tool-use loop per event.
 	MaxIterations int `yaml:"max_iterations"`
+	// Context is optional free text appended to the agent's system prompt so it
+	// knows your specific setup: ISP/plan line rates, gateway model, and what is
+	// already configured or tried. Strongly recommended — it stops the agent
+	// guessing (e.g. it can compute "90% of your 35 Mbps upload" and know your
+	// Smart Queues cap is already correct).
+	Context string `yaml:"context"`
 
 	// The following knobs coalesce events so a recurring incident doesn't
 	// trigger (and pay for) a fresh investigation every cycle.

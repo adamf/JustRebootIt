@@ -132,6 +132,22 @@ diagnostics:
     enabled: true
     model: claude-opus-4-8  # set claude-sonnet-4-6 for a cheaper, faster analysis
     max_iterations: 12      # cap on the agent's tool-use loop per event
+    # Tell the agent about YOUR setup so it reasons about your real environment
+    # instead of guessing (line rates, gateway model, what's already configured
+    # or tried). Strongly recommended — e.g. it then knows your upload SQM cap is
+    # already correct and won't keep telling you to lower it. Free text; edit to
+    # match your own connection.
+    context: |
+      ISP: Comcast/Xfinity, plan 1.2 Gbps down / 35 Mbps up (DOCSIS 3.1).
+      Gateway: UniFi Dream Machine Pro. Smart Queues is ENABLED with the upload
+      shaped to roughly 31-32 Mbps (~90% of the 35 Mbps line rate); this is
+      already at the correct floor, so do NOT recommend lowering the upload cap
+      further. The download is NOT shaped (a UDM Pro cannot shape a gigabit
+      download — Smart Queues disables hardware offload and tops out around a few
+      hundred Mbps). Upload bufferbloat is therefore already mitigated; prefer
+      other root causes (Wi-Fi, gateway CPU, DOCSIS upstream scheduling,
+      neighborhood/CMTS congestion, a specific peering/transit hop) unless the
+      data clearly shows the upload was saturated during the event.
     # Cost control: a recurring/shared incident reuses a prior analysis instead
     # of paying for a fresh investigation every cycle.
     repeat_ttl: 1h          # reuse a signature's analysis for this long (no AI call)

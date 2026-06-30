@@ -38,6 +38,12 @@ type Config struct {
 	// ModelCheap is the cheaper model used for far problems and for classes
 	// where evaluation found it good enough (default claude-sonnet-4-6).
 	ModelCheap string
+	// Context is optional operator-supplied free text appended to the system
+	// prompt: the ISP/plan rates, gateway model, and what is already configured
+	// or already tried, so the agent reasons about the real environment rather
+	// than guessing (e.g. "Comcast 1.2 Gbps down / 35 Mbps up, UDM Pro, Smart
+	// Queues upload already at 32 Mbps"). Empty leaves the base prompt unchanged.
+	Context string
 	// PrometheusURL is the base URL of the JustRebootIt Prometheus, used by the
 	// prometheus_query_range tool (e.g. http://prometheus:9090).
 	PrometheusURL string
@@ -124,6 +130,9 @@ type Analyzer struct {
 	client anthropic.Client
 	cfg    Config
 	http   *http.Client
+	// system is the effective system prompt (the base prompt plus any operator
+	// context), built once so it stays byte-stable across events for caching.
+	system string
 }
 
 // New builds an Analyzer. It returns (nil, nil) when the feature is disabled or
@@ -166,6 +175,7 @@ func New(cfg Config) (*Analyzer, error) {
 		client: anthropic.NewClient(opts...),
 		cfg:    cfg,
 		http:   &http.Client{Timeout: 20 * time.Second},
+		system: buildSystemPrompt(cfg.Context),
 	}, nil
 }
 
@@ -202,7 +212,7 @@ func (a *Analyzer) Analyze(ctx context.Context, ev Event, model string) (Analysi
 			// Two cache breakpoints. The system block caches the (byte-stable)
 			// tool list + system prompt — only the per-event user message varies.
 			System: []anthropic.BetaTextBlockParam{{
-				Text:         systemPrompt,
+				Text:         a.system,
 				CacheControl: ttl1h,
 			}},
 			// The agentic loop re-sends the whole growing conversation every
