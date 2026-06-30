@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 2,
+  "version": 3,
   "weekStart": "",
   "panels": [
     {
@@ -1381,7 +1381,7 @@
       "type": "geomap",
       "id": 81,
       "title": "Traceroute path, coloured by loss — $target",
-      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number — the lowest number is your gateway (start), the highest is the destination (end). The line walks the path between them. Hover any dot for its address, AS, and loss. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private/early hops and any with no usable geolocation aren't plotted. Needs trace_probes > 1 and trace_geo (default on).",
+      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number. Hop 0 is 'home' — your public IP's location — so the path starts at you, not the first backbone router. The highest number is the destination (end). The line walks the path between them. Hover any dot for its address, AS, and loss. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private gateway/LAN hops are dropped (no public geolocation, and their loss isn't real path loss), as is any hop with no usable fix. Needs trace_probes > 1 and trace_geo (default on).",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
       "gridPos": { "h": 14, "w": 24, "x": 0, "y": 169 },
       "fieldConfig": {
