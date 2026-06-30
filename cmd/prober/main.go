@@ -34,6 +34,7 @@ import (
 	"github.com/adamf/justrebootit/internal/config"
 	"github.com/adamf/justrebootit/internal/diag"
 	"github.com/adamf/justrebootit/internal/discovery"
+	"github.com/adamf/justrebootit/internal/geo"
 	"github.com/adamf/justrebootit/internal/grafana"
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
@@ -199,6 +200,9 @@ type app struct {
 	// asnResolver maps hop IPs to their origin AS (cached) so multi-pass traces
 	// can mark AS-handoff boundaries on the path.
 	asnResolver *asn.Resolver
+	// geoResolver maps hop IPs to an approximate location (cached) so the path
+	// can be plotted on a map.
+	geoResolver *geo.Resolver
 	// lastPath holds the most recent multi-pass per-hop loss + AS attribution per
 	// target, so a diagnosis event can carry the path picture to the AI without a
 	// tool round-trip. Guarded by pathMu.
@@ -259,6 +263,7 @@ func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
 		discovered:  make(map[string]context.CancelFunc),
 		reachHops:   make(map[string]int),
 		asnResolver: asn.New(0),
+		geoResolver: geo.New(0),
 		lastPath:    make(map[string][]tracer.LossHop),
 	}
 }
@@ -508,6 +513,7 @@ func (a *app) traceOnce(ctx context.Context, t config.Target) {
 	}
 	hops := tracer.AggregateLoss(got)
 	a.enrichASN(ctx, hops)
+	a.enrichGeo(ctx, hops)
 	a.m.ObserveHopLoss(t.Name, t.Group, hops)
 	a.recordHops(t.Name, reach)
 
@@ -545,6 +551,22 @@ func (a *app) enrichASN(ctx context.Context, hops []tracer.LossHop) {
 			hops[i].Handoff = true
 		}
 		prev = info.ASN
+	}
+}
+
+// enrichGeo geolocates each responding hop so the path can be mapped. No-op when
+// geolocation is disabled.
+func (a *app) enrichGeo(ctx context.Context, hops []tracer.LossHop) {
+	if !a.cfg.TraceGeo || a.geoResolver == nil {
+		return
+	}
+	for i := range hops {
+		if hops[i].Addr == "" {
+			continue
+		}
+		if loc := a.geoResolver.Lookup(ctx, hops[i].Addr); loc.OK {
+			hops[i].Lat, hops[i].Lon, hops[i].City, hops[i].GeoOK = loc.Lat, loc.Lon, loc.City, true
+		}
 	}
 }
 

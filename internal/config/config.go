@@ -65,6 +65,11 @@ type Config struct {
 	// marks AS-handoff boundaries on the path — peering/transit handoffs are where
 	// congestion and loss most often live. Only active when TraceProbes > 1.
 	TraceASN bool `yaml:"trace_asn"`
+	// TraceGeo, when true, geolocates each hop (via the free ip-api.com service)
+	// so the dashboard can plot the path on a map, coloured by loss. Approximate,
+	// especially for backbone routers. Only active when TraceProbes > 1; needs
+	// outbound HTTP to ip-api.com.
+	TraceGeo bool `yaml:"trace_geo"`
 
 	// ListenAddr is the address the Prometheus metrics endpoint listens on.
 	ListenAddr string `yaml:"listen_addr"`
@@ -315,6 +320,7 @@ func Default() Config {
 		TraceTimeout:  2 * time.Second,
 		TraceProbes:   5,
 		TraceASN:      true,
+		TraceGeo:      true,
 		ListenAddr:    ":9430",
 		Discovery: Discovery{
 			Enabled:      true,

@@ -249,6 +249,13 @@ AS is the ISP's problem — and now you have the per-hop, per-timestamp,
 AS-attributed evidence to escalate it. The AI diagnosis is taught this fingerprint
 too, so it stops blaming your LAN for a backbone hop.
 
+With **`trace_geo`** on (default), each hop is also geolocated (via the free
+ip-api.com service) and the bottom **"Path map"** panel plots the traced paths on
+a map — each hop a dot **coloured by loss**, connected from your gateway to the
+destination — so a lossy backbone hop literally lights up red where it sits on
+the map. Geolocation is approximate (backbone routers especially); it's a
+"where is the loss" picture, not survey-grade.
+
 ### Triggered diagnostics — deeper tests during a spike
 
 Intermittent problems are usually gone before you can react. The
@@ -567,7 +574,7 @@ Prober (`:9430/metrics`):
 | `probe_packets_sent_total` / `probe_packets_received_total` | counters |
 | `traceroute_hop_rtt_seconds{target,group,ttl}` | RTT to the router at each hop |
 | `traceroute_hop_info{target,ttl,addr}` | the router address seen at each hop |
-| `traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`); labels carry each hop's address and origin AS |
+| `traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name,lat,lon}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`); labels carry each hop's address, origin AS, and approximate lat/lon (for the path map) |
 | `traceroute_as_handoff{target,ttl,from_asn,to_asn}` | 1 at a TTL (hop) where the path crosses an AS boundary |
 | `traceroute_path_length` / `traceroute_reached` | path length / reached dest |
 | `discovery_selected{target}` | 1 if the candidate is currently promoted to active probing |
