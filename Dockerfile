@@ -9,8 +9,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# CGO is disabled so the result is a fully static binary that runs in distroless.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/prober ./cmd/prober \
+# Stamp the prober with the git commit (and build time) it was built from, so
+# the running binary — and the dashboard's "Running build" panel — report
+# exactly what code is deployed. The whole repo (including .git) is in the build
+# context, so we read the SHA here; a "-dirty" suffix flags an unclean tree, and
+# it falls back to "unknown" when built outside a git checkout. CGO is disabled
+# so the result is a fully static binary that runs in distroless.
+RUN COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)" \
+ && { git diff --quiet 2>/dev/null || COMMIT="${COMMIT}-dirty"; } \
+ && BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.commit=${COMMIT} -X main.buildTime=${BUILT}" -o /out/prober ./cmd/prober \
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/udmexporter ./cmd/udmexporter
 
 FROM gcr.io/distroless/static-debian12:latest

@@ -44,6 +44,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Build metadata, stamped at link time by the Dockerfile via
+// -ldflags "-X main.commit=<git sha> -X main.buildTime=<RFC3339>". They keep
+// their defaults for a plain `go build`/`go run`.
+var (
+	commit    = "dev"
+	buildTime = "unknown"
+)
+
 func main() {
 	configPath := flag.String("config", "/etc/justrebootit/targets.yml", "path to the prober config file")
 	overridesPath := flag.String("overrides", "", "path to an optional overrides file layered on top of -config (default: a sibling overrides.yml, applied if present)")
@@ -58,6 +66,8 @@ func main() {
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
+	m.SetBuildInfo(commit, buildTime)
+	log.Printf("prober build: commit=%s built=%s", commit, buildTime)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

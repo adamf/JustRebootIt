@@ -71,6 +71,11 @@ type Metrics struct {
 	ulManualLastLoaded *prometheus.GaugeVec
 	ulManualLastBps    *prometheus.GaugeVec
 	ulManualLastLoss   *prometheus.GaugeVec
+
+	// buildInfo carries the running prober's git commit and build time in its
+	// labels (value is always 1), so the dashboard can show exactly what code is
+	// deployed and whether a redeploy actually landed.
+	buildInfo *prometheus.GaugeVec
 }
 
 // New constructs the collectors and registers them with reg.
@@ -254,6 +259,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "underload_manual_last_loaded_loss_ratio",
 			Help: "Loaded packet loss from the most recent on-demand test, in [0,1], by host and direction.",
 		}, []string{"host", "direction"}),
+
+		buildInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "justrebootit_build_info",
+			Help: "Always 1; the running prober's git commit and build time are carried as labels so the dashboard can show what code is deployed.",
+		}, []string{"commit", "built"}),
 	}
 
 	reg.MustRegister(
@@ -267,8 +277,15 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ulIdle, m.ulLoaded, m.ulIncrease, m.ulRatio, m.ulThroughput, m.ulLoss,
 		m.ulManualRunning, m.ulManualLastInc, m.ulManualLastIdle,
 		m.ulManualLastLoaded, m.ulManualLastBps, m.ulManualLastLoss,
+		m.buildInfo,
 	)
 	return m
+}
+
+// SetBuildInfo records the running prober's git commit and build time as a
+// constant 1-valued series, so the dashboard can display what's deployed.
+func (m *Metrics) SetBuildInfo(commit, built string) {
+	m.buildInfo.WithLabelValues(commit, built).Set(1)
 }
 
 // ObserveProbe publishes the statistics from one ping cycle.
