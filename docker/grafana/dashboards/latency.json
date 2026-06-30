@@ -1353,7 +1353,7 @@
       "type": "geomap",
       "id": 81,
       "title": "Traceroute path, coloured by loss — $target",
-      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high), the line walks the path from your gateway to the destination. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private/early hops have no location and aren't plotted. Needs trace_probes > 1 and trace_geo (default on).",
+      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number — the lowest number is your gateway (start), the highest is the destination (end). The line walks the path between them. Hover any dot for its address, AS, and loss. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private/early hops and any with no usable geolocation aren't plotted. Needs trace_probes > 1 and trace_geo (default on).",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
       "gridPos": { "h": 14, "w": 24, "x": 0, "y": 169 },
       "fieldConfig": {
@@ -1371,7 +1371,7 @@
       },
       "options": {
         "basemap": { "type": "default", "name": "Basemap" },
-        "view": { "id": "north-america", "lat": 0, "lon": 0, "zoom": 1 },
+        "view": { "id": "coords", "lat": 39.5, "lon": -96, "zoom": 4 },
         "controls": { "showZoom": true, "mouseWheelZoom": true, "showAttribution": true, "showScale": false, "showMeasure": false, "showDebug": false },
         "tooltip": { "mode": "details" },
         "layers": [
@@ -1379,14 +1379,23 @@
             "type": "route",
             "name": "path",
             "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": { "style": { "color": { "field": "loss", "fixed": "dark-green" }, "lineWidth": 2, "opacity": 0.6 } },
+            "config": { "style": { "color": { "field": "loss", "fixed": "dark-green" }, "lineWidth": 1, "opacity": 0.5 } },
             "tooltip": false
           },
           {
             "type": "markers",
             "name": "hops",
             "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": { "style": { "color": { "field": "loss", "fixed": "dark-green" }, "size": { "fixed": 8 }, "opacity": 0.9, "symbol": { "mode": "fixed", "fixed": "img/icons/marker/circle.svg" } } }
+            "config": {
+              "style": {
+                "color": { "field": "loss", "fixed": "dark-green" },
+                "size": { "fixed": 6 },
+                "opacity": 0.9,
+                "symbol": { "mode": "fixed", "fixed": "img/icons/marker/circle.svg" },
+                "text": { "field": "hop", "fixed": "" },
+                "textConfig": { "fontSize": 11, "textAlign": "left", "textBaseline": "middle", "offsetX": 7, "offsetY": 0 }
+              }
+            }
           }
         ]
       },

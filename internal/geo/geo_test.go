@@ -15,6 +15,7 @@ func TestParseResponse(t *testing.T) {
 		`{"status":"fail","message":"private range"}`,
 		`not json`,
 		`{"status":"success","lat":0,"lon":0,"city":""}`,
+		`{"status":"success","lat":0.5,"lon":-0.2,"city":"null island"}`,
 	} {
 		if got := parseResponse([]byte(body)); got.OK {
 			t.Errorf("parseResponse(%q) should be no-fix, got %+v", body, got)
