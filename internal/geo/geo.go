@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -107,8 +108,10 @@ func parseResponse(body []byte) Loc {
 	if err := json.Unmarshal(body, &out); err != nil || out.Status != "success" {
 		return Loc{}
 	}
-	// (0,0) is the null island — treat a missing fix as no fix.
-	if out.Lat == 0 && out.Lon == 0 {
+	// Reject the "null island" (~0,0 in the Gulf of Guinea), where IPs with no
+	// real fix get dumped — no legitimate hop on a residential path is there, so
+	// a near-zero coordinate is a bad geolocation, not a mid-ocean router.
+	if math.Abs(out.Lat) < 1 && math.Abs(out.Lon) < 1 {
 		return Loc{}
 	}
 	return Loc{Lat: out.Lat, Lon: out.Lon, City: strings.TrimSpace(out.City), OK: true}
