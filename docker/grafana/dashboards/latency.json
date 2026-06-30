@@ -1237,12 +1237,43 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 140 }
     },
     {
+      "type": "timeseries",
+      "id": 73,
+      "title": "Packet loss to destination — $target",
+      "description": "End-to-end packet loss to $target itself — NOT per-hop. This is the number that actually matters: if it sits near 0, the path is delivering your packets and any red in the per-hop panel below is just an intermediate router or your own gateway deprioritizing ICMP (benign — ignore it). Sustained loss HERE is the real problem; use the per-hop panel and table below to localize which hop and AS it starts at.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 141 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 25, "gradientMode": "opacity", "showPoints": "never", "spanNulls": true },
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.02 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "probe_loss_ratio{target=~\"$target\"}",
+          "legendFormat": "loss to {{target}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "type": "state-timeline",
       "id": 71,
       "title": "Per-hop packet loss over time — $target",
-      "description": "One lane per hop on the path to $target. TTL is the hop number (hop 01 is the first hop / your gateway), the SAME numbering as the table below. Colour = packet loss at that hop each trace cycle (green = none, red = high). How to read it: a lane that flickers red at the TOP (low hop numbers — your gateway and early hops) or a lone mid-path lane is almost always benign ICMP rate-limiting; ignore it. What matters is loss that PERSISTS across the lanes nearest the destination (the high hop numbers, at the bottom) and that also shows in the target's own packet-loss panel — that's a real path problem. Needs trace_probes > 1.",
+      "description": "One lane per hop on the path to $target. TTL is the hop number (hop 01 is the first hop / your gateway), the SAME numbering as the table below. Colour = packet loss at that hop each trace cycle (green = none, red = high). How to read it: a lane that flickers red at the TOP (low hop numbers — your gateway and early hops) or a lone mid-path lane is almost always benign ICMP rate-limiting; ignore it. What matters is loss that PERSISTS across the lanes nearest the destination (the high hop numbers, at the bottom) and that shows in the 'Packet loss to destination' panel above — that's a real path problem. (Lane order is numeric only once the prober is rebuilt with the zero-padded TTL labels.) Needs trace_probes > 1.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 141 },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 147 },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -1283,7 +1314,7 @@
       "title": "Path: hops, AS owners & loss — $target",
       "description": "The current path to $target, one row per hop (hop = TTL = the same numbering as the lanes above; hop 01 is your gateway). 'loss' is that hop's packet loss right now. A change in ASN between consecutive hops is an AS handoff — a peering/transit boundary. Note where PERSISTENT loss (loss that continues to the destination) begins relative to the handoffs: loss starting at/after the handoff from your ISP's AS to a transit/peer AS is the ISP's problem to escalate. Private gateway hops show a blank ASN. Needs trace_probes > 1.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 153 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 158 },
       "fieldConfig": {
         "defaults": {},
         "overrides": [
