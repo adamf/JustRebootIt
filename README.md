@@ -226,6 +226,29 @@ Candidate names must be unique and must not collide with the always-on targets.
 The dashboard's **Active discovered paths** panel shows which are currently
 selected, and **Candidate distance** shows how many hops away each one is.
 
+### Per-hop packet loss & AS boundaries (optional)
+
+A whole class of "it's not me, it's the path" problems — a remote stream or game
+stutters while Netflix/YouTube are fine — is **packet loss on a specific
+middle-mile path**, which a latency probe can't see. By default (**`trace_probes: 5`**) the prober runs 5
+traceroute passes per cycle for each trace-enabled target and publishes **per-hop
+loss** (`traceroute_hop_loss_ratio`) — set it to `1` for just a single path
+snapshot with no loss data. With **`trace_asn`** on (default), each hop is also
+attributed to its **origin AS** (via Team Cymru DNS) and the prober marks
+**AS-handoff boundaries** (`traceroute_as_handoff`) — the peering/transit
+handoffs where congestion lives. (Per-cycle loss resolution is 1/`trace_probes`,
+refined over time by averaging cycles.)
+
+The bottom **"Path packet loss & AS boundaries"** row graphs per-hop loss and
+lists the AS path. The one interpretation rule that matters: **loss at a single
+mid-path hop that doesn't continue to later hops is just that router
+rate-limiting its ICMP replies — ignore it.** Real path loss *persists* across
+consecutive hops toward the destination (and shows in the target's own loss
+panel). Loss that begins at/after the handoff from your ISP's AS to a transit/peer
+AS is the ISP's problem — and now you have the per-hop, per-timestamp,
+AS-attributed evidence to escalate it. The AI diagnosis is taught this fingerprint
+too, so it stops blaming your LAN for a backbone hop.
+
 ### Triggered diagnostics — deeper tests during a spike
 
 Intermittent problems are usually gone before you can react. The
@@ -544,6 +567,9 @@ Prober (`:9430/metrics`):
 | `probe_packets_sent_total` / `probe_packets_received_total` | counters |
 | `traceroute_hop_rtt_seconds{target,group,ttl}` | RTT to the router at each hop |
 | `traceroute_hop_info{target,ttl,addr}` | the router address seen at each hop |
+| `traceroute_hop_loss_ratio{target,group,ttl}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`) |
+| `traceroute_hop_asn_info{target,ttl,addr,asn,as_name}` | origin AS owning each hop |
+| `traceroute_as_handoff{target,ttl,from_asn,to_asn}` | 1 at a TTL where the path crosses an AS boundary |
 | `traceroute_path_length` / `traceroute_reached` | path length / reached dest |
 | `discovery_selected{target}` | 1 if the candidate is currently promoted to active probing |
 | `discovery_reach_hops{target}` / `discovery_reached{target}` | candidate distance / reachability |
