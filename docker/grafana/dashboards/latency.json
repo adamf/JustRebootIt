@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 1,
+  "version": 2,
   "weekStart": "",
   "panels": [
     {
