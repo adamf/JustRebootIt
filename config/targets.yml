@@ -27,6 +27,10 @@ trace_probes: 5
 # (peering/transit handoffs, where congestion lives). Only active when
 # trace_probes > 1. Needs outbound DNS.
 trace_asn: true
+# Geolocate each hop (free ip-api.com service) so the dashboard's "Path map"
+# panel can plot the traced paths coloured by loss. Approximate, especially for
+# backbone routers. Only active when trace_probes > 1; needs outbound HTTP.
+trace_geo: true
 
 # Prometheus metrics endpoint.
 listen_addr: ":9430"
