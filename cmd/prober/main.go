@@ -524,6 +524,7 @@ func (a *app) traceOnce(ctx context.Context, t config.Target) {
 	hops := tracer.AggregateLoss(got)
 	a.enrichASN(ctx, hops)
 	a.enrichGeo(ctx, hops)
+	hops = a.anchorPath(ctx, hops)
 	a.m.ObserveHopLoss(t.Name, t.Group, hops)
 	a.recordHops(t.Name, reach)
 
@@ -562,6 +563,35 @@ func (a *app) enrichASN(ctx context.Context, hops []tracer.LossHop) {
 		}
 		prev = info.ASN
 	}
+}
+
+// anchorPath prepares an enriched path for loss display and mapping. It drops
+// the leading private hops — your own LAN/gateway, which aren't real path loss
+// and can't be geolocated — so loss isn't tracked for them, and (when our public
+// IP can be located) prepends a "home" hop so the mapped path starts at your
+// location instead of the first backbone router that happens to geolocate.
+func (a *app) anchorPath(ctx context.Context, hops []tracer.LossHop) []tracer.LossHop {
+	i := 0
+	for i < len(hops) && geo.IsPrivate(hops[i].Addr) {
+		i++
+	}
+	out := hops[i:]
+
+	if a.cfg.TraceGeo && a.geoResolver != nil {
+		if home := a.geoResolver.Self(ctx); home.OK {
+			anchor := tracer.LossHop{
+				TTL:   0,
+				Addr:  home.IP,
+				City:  home.City,
+				Lat:   home.Lat,
+				Lon:   home.Lon,
+				GeoOK: true,
+			}
+			// Fresh slice so we don't clobber the trimmed hops' backing array.
+			out = append([]tracer.LossHop{anchor}, out...)
+		}
+	}
+	return out
 }
 
 // enrichGeo geolocates each responding hop so the path can be mapped. No-op when
