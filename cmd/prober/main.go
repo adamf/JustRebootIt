@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/adamf/justrebootit/internal/aidiag"
+	"github.com/adamf/justrebootit/internal/asn"
 	"github.com/adamf/justrebootit/internal/config"
 	"github.com/adamf/justrebootit/internal/diag"
 	"github.com/adamf/justrebootit/internal/discovery"
@@ -195,6 +196,9 @@ type app struct {
 	// reachHops is the last-known hop distance per target, fed by traceroutes
 	// and discovery, so an event can be classified near vs far.
 	reachHops map[string]int
+	// asnResolver maps hop IPs to their origin AS (cached) so multi-pass traces
+	// can mark AS-handoff boundaries on the path.
+	asnResolver *asn.Resolver
 
 	// Manual-investigation rate limiting (the dashboard "take a look" button).
 	manualMu       sync.Mutex
@@ -242,13 +246,14 @@ func (a *app) allowManual(now time.Time) bool {
 
 func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
 	return &app{
-		ctx:        ctx,
-		cfg:        cfg,
-		m:          m,
-		diagJobs:   make(chan diag.Trigger, 64),
-		registry:   make(map[string]config.Target),
-		discovered: make(map[string]context.CancelFunc),
-		reachHops:  make(map[string]int),
+		ctx:         ctx,
+		cfg:         cfg,
+		m:           m,
+		diagJobs:    make(chan diag.Trigger, 64),
+		registry:    make(map[string]config.Target),
+		discovered:  make(map[string]context.CancelFunc),
+		reachHops:   make(map[string]int),
+		asnResolver: asn.New(0),
 	}
 }
 
@@ -430,27 +435,98 @@ func (a *app) pingLoop(ctx context.Context, t config.Target) {
 
 // traceLoop traces one target on the trace interval until cancelled.
 func (a *app) traceLoop(ctx context.Context, t config.Target) {
-	tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
-
 	ticker := time.NewTicker(a.cfg.TraceInterval)
 	defer ticker.Stop()
 	for {
-		res, err := tr.Trace(ctx, t.Host)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Printf("trace %s (%s): %v", t.Name, t.Host, err)
-		} else {
-			a.m.ObserveTrace(t.Name, t.Group, res)
-			a.recordHops(t.Name, traceHops(res))
-		}
-
+		a.traceOnce(ctx, t)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// traceOnce runs one trace cycle for a target. With trace_probes == 1 it takes a
+// single path snapshot (as before); with trace_probes > 1 it runs that many
+// passes concurrently, aggregates per-hop packet loss, attributes each hop to
+// its origin AS, and marks AS-handoff boundaries.
+func (a *app) traceOnce(ctx context.Context, t config.Target) {
+	if a.cfg.TraceProbes <= 1 {
+		tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+		res, err := tr.Trace(ctx, t.Host)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("trace %s (%s): %v", t.Name, t.Host, err)
+			}
+			return
+		}
+		a.m.ObserveTrace(t.Name, t.Group, res)
+		a.recordHops(t.Name, traceHops(res))
+		return
+	}
+
+	// Multi-pass: run the passes concurrently (each Tracer has a distinct ICMP
+	// id) so wall-clock stays near a single pass even when a hop times out.
+	results := make([]tracer.Result, a.cfg.TraceProbes)
+	var wg sync.WaitGroup
+	for i := 0; i < a.cfg.TraceProbes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tr := tracer.New(a.cfg.TraceMaxHops, a.cfg.TraceTimeout, a.cfg.Privileged)
+			if res, err := tr.Trace(ctx, t.Host); err == nil {
+				results[i] = res
+			}
+		}(i)
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return
+	}
+
+	got := results[:0]
+	reach := 0
+	for _, r := range results {
+		if len(r.Hops) == 0 {
+			continue
+		}
+		got = append(got, r)
+		if d := traceHops(r); d > reach {
+			reach = d
+		}
+	}
+	if len(got) == 0 {
+		log.Printf("trace %s (%s): all %d passes failed", t.Name, t.Host, a.cfg.TraceProbes)
+		return
+	}
+	hops := tracer.AggregateLoss(got)
+	a.enrichASN(ctx, hops)
+	a.m.ObserveHopLoss(t.Name, t.Group, hops)
+	a.recordHops(t.Name, reach)
+}
+
+// enrichASN resolves each responding hop's origin AS and flags the boundaries
+// where the AS changes from the previous responding hop. It is a no-op when AS
+// resolution is disabled.
+func (a *app) enrichASN(ctx context.Context, hops []tracer.LossHop) {
+	if !a.cfg.TraceASN || a.asnResolver == nil {
+		return
+	}
+	prev := ""
+	for i := range hops {
+		if hops[i].Addr == "" {
+			continue
+		}
+		info := a.asnResolver.Lookup(ctx, hops[i].Addr)
+		hops[i].ASN, hops[i].ASName = info.ASN, info.Name
+		if info.ASN == "" {
+			continue
+		}
+		if prev != "" && info.ASN != prev {
+			hops[i].Handoff = true
+		}
+		prev = info.ASN
 	}
 }
 

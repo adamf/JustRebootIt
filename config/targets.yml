@@ -19,6 +19,14 @@ privileged: true
 trace_interval: 60s
 trace_max_hops: 30
 trace_timeout: 2s
+# Passes per trace cycle. 1 = a single path snapshot (default). Set higher (e.g.
+# 6) to measure PER-HOP PACKET LOSS — the evidence that localizes where loss
+# begins on a path (an ISP backbone or peering hop). Heavier; opt-in.
+trace_probes: 1
+# Resolve each hop's origin AS (Team Cymru DNS) and mark AS-handoff boundaries
+# (peering/transit handoffs, where congestion lives). Only active when
+# trace_probes > 1. Needs outbound DNS.
+trace_asn: true
 
 # Prometheus metrics endpoint.
 listen_addr: ":9430"

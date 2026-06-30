@@ -45,6 +45,72 @@ type Result struct {
 	Reached bool
 }
 
+// LossHop is one hop's aggregate over several traceroute passes: how often the
+// router at this TTL answered, used to localize where packet loss begins on a
+// path. Loss is a fraction in [0,1] over the passes that probed this TTL.
+//
+// IMPORTANT interpretation: loss at a single mid-path hop that does NOT persist
+// to later hops is almost always ICMP rate-limiting by that router, not real
+// path loss — routers deprioritize generating TTL-exceeded replies. Real packet
+// loss shows up as loss that PERSISTS across consecutive hops toward the
+// destination. Correlate with the destination's own probe_loss_ratio.
+type LossHop struct {
+	TTL  int
+	Addr string
+	Loss float64
+	RTT  time.Duration // mean RTT over the passes that answered
+	// ASN and ASName are filled in by the caller (via an AS resolver) from Addr.
+	// Handoff is true when this hop's ASN differs from the previous responding
+	// hop's ASN — a peering/transit boundary, where congestion often lives.
+	ASN     string
+	ASName  string
+	Handoff bool
+}
+
+// AggregateLoss reduces several traceroute passes to per-TTL loss/RTT. Passes
+// can stop at different TTLs (a pass that reached the destination is shorter), so
+// a TTL's loss is computed only over the passes that actually probed it.
+func AggregateLoss(results []Result) []LossHop {
+	maxLen := 0
+	for _, r := range results {
+		if len(r.Hops) > maxLen {
+			maxLen = len(r.Hops)
+		}
+	}
+	out := make([]LossHop, 0, maxLen)
+	for ttl := 1; ttl <= maxLen; ttl++ {
+		var attempts, replies, n int
+		var rttSum time.Duration
+		addr := ""
+		for _, r := range results {
+			if len(r.Hops) < ttl {
+				continue // this pass stopped before reaching this TTL
+			}
+			attempts++
+			h := r.Hops[ttl-1]
+			if h.Addr != "" && !h.Timeout {
+				replies++
+				rttSum += h.RTT
+				n++
+				addr = h.Addr
+			}
+		}
+		if attempts == 0 {
+			continue
+		}
+		hop := LossHop{
+			TTL:  ttl,
+			Addr: addr,
+			Loss: float64(attempts-replies) / float64(attempts),
+		}
+		if n > 0 {
+			hop.RTT = rttSum / time.Duration(n)
+		}
+		out = append(out, hop)
+	}
+	return out
+}
+
 // Tracer performs ICMP traceroutes. A single Tracer serializes its probes (one
 // outstanding TTL at a time), which keeps reply matching simple and the extra
 // traffic negligible.

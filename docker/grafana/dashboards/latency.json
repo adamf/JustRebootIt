@@ -1229,6 +1229,83 @@
         "showUser": false,
         "showTime": true
       }
+    },
+    {
+      "type": "row",
+      "id": 70,
+      "title": "Path packet loss & AS boundaries — $target",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 140 }
+    },
+    {
+      "type": "timeseries",
+      "id": 71,
+      "title": "Per-hop packet loss (path) — $target",
+      "description": "Per-hop packet loss along the path to $target (needs trace_probes > 1). IMPORTANT: loss at a single mid-path hop that does NOT continue to later hops is almost always that router rate-limiting its ICMP replies — benign. Trust loss that PERSISTS across consecutive hops toward the destination and also shows in the target's own packet-loss panel. This is the evidence to take to your ISP. Empty unless trace_probes > 1.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 141 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "auto", "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["max", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
+          "legendFormat": "ttl {{ttl}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 72,
+      "title": "AS path & handoffs — $target",
+      "description": "Which AS owns each hop to $target, plus that hop's loss. A change in ASN between consecutive hops is an AS handoff (a peering/transit boundary) — note where persistent loss begins relative to it; loss starting at/after the handoff from your ISP's AS to a transit/peer AS is the ISP's problem to fix. Needs trace_asn (default on) and trace_probes > 1.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 141 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "loss" }, "properties": [{ "id": "unit", "value": "percentunit" }] }
+        ]
+      },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_hop_asn_info{target=~\"$target\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "target": true, "group": true, "Value #A": true, "__name__": true, "job": true, "instance": true },
+            "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value #B": "loss" },
+            "indexByName": { "ttl": 0, "addr": 1, "asn": 2, "as_name": 3, "Value #B": 4 }
+          }
+        }
+      ]
     }
   ]
 }
