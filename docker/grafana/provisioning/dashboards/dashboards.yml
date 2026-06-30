@@ -1,5 +1,6 @@
 # Load dashboard JSON from disk so the stack comes up with the latency
-# dashboard already in place.
+# dashboard already in place. The dashboard is managed as code (this repo's
+# docker/grafana/dashboards/latency.json) — to change it, edit the JSON.
 apiVersion: 1
 
 providers:
@@ -8,7 +9,15 @@ providers:
     folder: JustRebootIt
     type: file
     disableDeletion: false
-    allowUiUpdates: true
+    # File is the source of truth: re-import on every change. With
+    # allowUiUpdates:true Grafana only re-imports when the JSON's "version" field
+    # is bumped, so static-version edits to the file were silently ignored and
+    # the dashboard froze at whatever was first provisioned. false makes the file
+    # authoritative (UI edits aren't persisted — edit the JSON instead).
+    allowUiUpdates: false
+    # Re-scan the dashboards dir this often, so a changed file lands without a
+    # restart.
+    updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards
       foldersFromFilesStructure: false
