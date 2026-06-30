@@ -1237,30 +1237,42 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 140 }
     },
     {
-      "type": "timeseries",
+      "type": "state-timeline",
       "id": 71,
-      "title": "Per-hop packet loss (path) — $target",
-      "description": "Per-hop packet loss along the path to $target (needs trace_probes > 1). IMPORTANT: loss at a single mid-path hop that does NOT continue to later hops is almost always that router rate-limiting its ICMP replies — benign. Trust loss that PERSISTS across consecutive hops toward the destination and also shows in the target's own packet-loss panel. This is the evidence to take to your ISP. Empty unless trace_probes > 1.",
+      "title": "Per-hop packet loss over time — $target",
+      "description": "One lane per hop on the path to $target. TTL is the hop number (hop 01 is the first hop / your gateway), the SAME numbering as the table below. Colour = packet loss at that hop each trace cycle (green = none, red = high). How to read it: a lane that flickers red at the TOP (low hop numbers — your gateway and early hops) or a lone mid-path lane is almost always benign ICMP rate-limiting; ignore it. What matters is loss that PERSISTS across the lanes nearest the destination (the high hop numbers, at the bottom) and that also shows in the target's own packet-loss panel — that's a real path problem. Needs trace_probes > 1.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 141 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 141 },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "auto", "spanNulls": true }
+          "custom": { "fillOpacity": 90, "lineWidth": 0 },
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "orange", "value": 0.2 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["max", "lastNotNull"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "showValue": "never",
+        "mergeValues": true,
+        "alignValue": "center",
+        "rowHeight": 0.9,
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
       },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
           "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
-          "legendFormat": "ttl {{ttl}}",
+          "legendFormat": "hop {{ttl}}",
           "refId": "A"
         }
       ]
@@ -1268,43 +1280,36 @@
     {
       "type": "table",
       "id": 72,
-      "title": "AS path & handoffs — $target",
-      "description": "Which AS owns each hop to $target, plus that hop's loss. A change in ASN between consecutive hops is an AS handoff (a peering/transit boundary) — note where persistent loss begins relative to it; loss starting at/after the handoff from your ISP's AS to a transit/peer AS is the ISP's problem to fix. Needs trace_asn (default on) and trace_probes > 1.",
+      "title": "Path: hops, AS owners & loss — $target",
+      "description": "The current path to $target, one row per hop (hop = TTL = the same numbering as the lanes above; hop 01 is your gateway). 'loss' is that hop's packet loss right now. A change in ASN between consecutive hops is an AS handoff — a peering/transit boundary. Note where PERSISTENT loss (loss that continues to the destination) begins relative to the handoffs: loss starting at/after the handoff from your ISP's AS to a transit/peer AS is the ISP's problem to escalate. Private gateway hops show a blank ASN. Needs trace_probes > 1.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 141 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 153 },
       "fieldConfig": {
         "defaults": {},
         "overrides": [
-          { "matcher": { "id": "byName", "options": "loss" }, "properties": [{ "id": "unit", "value": "percentunit" }] }
+          { "matcher": { "id": "byName", "options": "loss" }, "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "custom.cellOptions", "value": { "type": "color-background" } }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "orange", "value": 0.2 }, { "color": "red", "value": 0.5 }] } }] }
         ]
       },
       "options": { "showHeader": true },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-          "expr": "traceroute_hop_asn_info{target=~\"$target\"}",
-          "format": "table",
-          "instant": true,
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
           "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
           "format": "table",
           "instant": true,
-          "refId": "B"
+          "refId": "A"
         }
       ],
       "transformations": [
-        { "id": "merge", "options": {} },
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "Time": true, "target": true, "group": true, "Value #A": true, "__name__": true, "job": true, "instance": true },
-            "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value #B": "loss" },
-            "indexByName": { "ttl": 0, "addr": 1, "asn": 2, "as_name": 3, "Value #B": 4 }
+            "excludeByName": { "Time": true, "target": true, "group": true, "Value": false, "__name__": true, "job": true, "instance": true },
+            "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value": "loss" },
+            "indexByName": { "ttl": 0, "addr": 1, "asn": 2, "as_name": 3, "Value": 4 }
           }
-        }
+        },
+        { "id": "sortBy", "options": { "sort": [{ "field": "hop", "desc": false }] } }
       ]
     }
   ]

@@ -20,7 +20,7 @@ You have read-only investigative tools. Use them deliberately:
   * probe_rtt_median_seconds{target,group}, probe_rtt_best_seconds, probe_rtt_worst_seconds, probe_loss_ratio{target,group}
   * probe_rtt_percentile_seconds{target,group,percentile}
   * traceroute_hop_rtt_seconds{target,group,ttl}, traceroute_hop_info{target,ttl,addr}
-  * traceroute_hop_loss_ratio{target,group,ttl} (per-hop packet loss, when multi-pass tracing is on), traceroute_hop_asn_info{target,ttl,addr,asn,as_name} (which AS owns each hop), traceroute_as_handoff{target,ttl,from_asn,to_asn} (1 where the path crosses an AS boundary)
+  * traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name} (per-hop packet loss when multi-pass tracing is on; the labels also give each hop's address and origin AS, so one query describes the whole path), traceroute_as_handoff{target,ttl,from_asn,to_asn} (1 where the path crosses an AS boundary). ttl is the hop number (zero-padded, 01 = first hop / gateway).
   * udm_wan_rx_bytes_per_second, udm_wan_tx_bytes_per_second (multiply by 8 for bits/s), udm_wan_latency_ms, udm_wan_drops
   * udm_gateway_cpu_percent, udm_gateway_memory_percent, udm_clients
   Target "group" labels are: gateway, isp, anchor, content, discovered.
