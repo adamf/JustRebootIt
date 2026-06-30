@@ -230,12 +230,14 @@ selected, and **Candidate distance** shows how many hops away each one is.
 
 A whole class of "it's not me, it's the path" problems — a remote stream or game
 stutters while Netflix/YouTube are fine — is **packet loss on a specific
-middle-mile path**, which a latency probe can't see. Set **`trace_probes`** above
-1 (e.g. `6`) and the prober runs that many traceroute passes per cycle and
-publishes **per-hop loss** (`traceroute_hop_loss_ratio`). With **`trace_asn`** on
-(default), each hop is also attributed to its **origin AS** (via Team Cymru DNS)
-and the prober marks **AS-handoff boundaries** (`traceroute_as_handoff`) — the
-peering/transit handoffs where congestion lives.
+middle-mile path**, which a latency probe can't see. By default (**`trace_probes: 5`**) the prober runs 5
+traceroute passes per cycle for each trace-enabled target and publishes **per-hop
+loss** (`traceroute_hop_loss_ratio`) — set it to `1` for just a single path
+snapshot with no loss data. With **`trace_asn`** on (default), each hop is also
+attributed to its **origin AS** (via Team Cymru DNS) and the prober marks
+**AS-handoff boundaries** (`traceroute_as_handoff`) — the peering/transit
+handoffs where congestion lives. (Per-cycle loss resolution is 1/`trace_probes`,
+refined over time by averaging cycles.)
 
 The bottom **"Path packet loss & AS boundaries"** row graphs per-hop loss and
 lists the AS path. The one interpretation rule that matters: **loss at a single

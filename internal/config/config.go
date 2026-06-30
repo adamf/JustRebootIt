@@ -55,10 +55,11 @@ type Config struct {
 	// TraceTimeout is the per-hop wait for an ICMP time-exceeded reply.
 	TraceTimeout time.Duration `yaml:"trace_timeout"`
 	// TraceProbes is how many traceroute passes run per cycle for a trace-enabled
-	// target. 1 (the default) is a single path snapshot, as before. Set it higher
-	// (e.g. 6) to measure PER-HOP PACKET LOSS over the passes — the evidence that
-	// localizes where loss begins on a path (e.g. an ISP backbone or peering
-	// hop). Heavier, so it is opt-in via this knob.
+	// target. >1 (default 5) measures PER-HOP PACKET LOSS over the passes — the
+	// evidence that localizes where loss begins on a path (e.g. an ISP backbone
+	// or peering hop). Set it to 1 for just a single path snapshot (no loss
+	// data). Loss resolution per cycle is 1/TraceProbes, refined over time by
+	// averaging cycles in Prometheus.
 	TraceProbes int `yaml:"trace_probes"`
 	// TraceASN, when true, resolves each hop's origin AS (via Team Cymru DNS) and
 	// marks AS-handoff boundaries on the path — peering/transit handoffs are where
@@ -312,7 +313,7 @@ func Default() Config {
 		TraceInterval: 60 * time.Second,
 		TraceMaxHops:  30,
 		TraceTimeout:  2 * time.Second,
-		TraceProbes:   1,
+		TraceProbes:   5,
 		TraceASN:      true,
 		ListenAddr:    ":9430",
 		Discovery: Discovery{
