@@ -199,6 +199,11 @@ type app struct {
 	// asnResolver maps hop IPs to their origin AS (cached) so multi-pass traces
 	// can mark AS-handoff boundaries on the path.
 	asnResolver *asn.Resolver
+	// lastPath holds the most recent multi-pass per-hop loss + AS attribution per
+	// target, so a diagnosis event can carry the path picture to the AI without a
+	// tool round-trip. Guarded by pathMu.
+	pathMu   sync.Mutex
+	lastPath map[string][]tracer.LossHop
 
 	// Manual-investigation rate limiting (the dashboard "take a look" button).
 	manualMu       sync.Mutex
@@ -254,6 +259,7 @@ func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
 		discovered:  make(map[string]context.CancelFunc),
 		reachHops:   make(map[string]int),
 		asnResolver: asn.New(0),
+		lastPath:    make(map[string][]tracer.LossHop),
 	}
 }
 
@@ -504,6 +510,18 @@ func (a *app) traceOnce(ctx context.Context, t config.Target) {
 	a.enrichASN(ctx, hops)
 	a.m.ObserveHopLoss(t.Name, t.Group, hops)
 	a.recordHops(t.Name, reach)
+
+	a.pathMu.Lock()
+	a.lastPath[t.Name] = hops
+	a.pathMu.Unlock()
+}
+
+// pathSnapshot returns the most recent multi-pass per-hop loss + AS attribution
+// for a target (nil if none), for the AI diagnosis context.
+func (a *app) pathSnapshot(target string) []tracer.LossHop {
+	a.pathMu.Lock()
+	defer a.pathMu.Unlock()
+	return a.lastPath[target]
 }
 
 // enrichASN resolves each responding hop's origin AS and flags the boundaries
@@ -618,6 +636,7 @@ func (a *app) runDiagnostics(trig diag.Trigger) {
 		Signature: trig.Signature,
 		Hops:      trig.Hops,
 		ScopeKind: trig.ScopeKind,
+		PathLoss:  a.pathSnapshot(t.Name),
 	}
 
 	func() {

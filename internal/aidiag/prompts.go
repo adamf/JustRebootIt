@@ -44,7 +44,7 @@ Bufferbloat — diagnose it correctly; do NOT default to it:
 Middle-mile / path-loss fingerprint — do NOT mistake it for a local problem:
 - A symptom that affects an APP (a remote video stream, a game) but NOT big CDN services (Netflix, YouTube) is a strong tell for middle-mile path trouble, not your access link or LAN. CDNs cache inside the ISP one hop away and degrade quality gracefully on loss; a long-path, small-buffer app exposes the very packet loss the CDN hides. "Netflix works" is therefore NOT evidence the network is healthy.
 - The signal for this is PACKET LOSS on a specific path, especially loss that PERSISTS across consecutive hops toward the destination (use traceroute_hop_loss_ratio). Loss at a single mid-path hop that does NOT continue to later hops is almost always that router rate-limiting its ICMP replies — benign; ignore it. Real path loss persists hop-over-hop and shows up in the destination's own probe_loss_ratio too.
-- Use traceroute_as_handoff and traceroute_hop_asn_info to locate WHERE persistent loss begins relative to AS boundaries. Loss that starts at or just after the handoff from the home ISP's AS to a transit/peer AS (e.g. Comcast AS7922 handing off to a transit provider) is a peering/transit congestion problem — the ISP's to fix, not the customer's. Such congestion is typically worst at evening peak.
+- The current path to this target — each hop's per-hop loss, its origin AS, and where the path crosses an AS boundary (handoff) — is provided in the event context below when multi-pass tracing is available; reason over it directly, and use traceroute_hop_loss_ratio (its asn/as_name labels) and traceroute_as_handoff to see the history. Loss that starts at or just after the handoff from the home ISP's AS to a transit/peer AS (e.g. Comcast AS7922 handing off to a transit provider) is a peering/transit congestion problem — the ISP's to fix, not the customer's. Such congestion is typically worst at evening peak.
 - When the evidence points to a backbone/peering/transit hop, the recommended action is to GATHER the per-hop-loss evidence (which hop, how much loss, the timestamps and peak-hour pattern, the AS boundary) and escalate to the ISP — NOT a local fix (SQM, Wi-Fi, a reboot) which cannot fix a hop you don't own.
 
 Keep tool use focused — a handful of well-chosen queries, not dozens.
@@ -97,6 +97,8 @@ func userPrompt(ev Event) string {
 		b.WriteString("- DNS resolution probe: FAILED\n")
 	}
 
+	b.WriteString(formatPathLoss(ev.PathLoss))
+
 	b.WriteString("\nUse the time around the detection timestamp to query the monitoring data, then explain what most likely happened.")
 	return b.String()
 }
@@ -126,6 +128,8 @@ func manualPrompt(ev Event) string {
 		b.WriteString("- DNS resolution probe: FAILED\n")
 	}
 
+	b.WriteString(formatPathLoss(ev.PathLoss))
+
 	b.WriteString("\nGive a clear verdict on whether things look normal or degraded versus baseline, and if degraded, where the problem most likely is.")
 	return b.String()
 }
@@ -135,6 +139,36 @@ func ratio(a, b time.Duration) float64 {
 		return 0
 	}
 	return float64(a) / float64(b)
+}
+
+// formatPathLoss renders the most recent multi-pass per-hop loss and AS path, so
+// the agent reasons over where loss begins and where the path crosses AS
+// boundaries without having to query for it. Returns "" when there is no data.
+func formatPathLoss(hops []tracer.LossHop) string {
+	if len(hops) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("- Per-hop packet loss along the current path (continuous multi-pass tracing; loss that PERSISTS toward the destination is real, lone-hop loss is benign ICMP rate-limiting):\n")
+	prevASN := ""
+	for _, h := range hops {
+		addr := h.Addr
+		if addr == "" {
+			addr = "*"
+		}
+		line := fmt.Sprintf("    hop %02d: %-15s loss %3.0f%%", h.TTL, addr, h.Loss*100)
+		if h.ASN != "" {
+			line += fmt.Sprintf("  AS%s %s", h.ASN, h.ASName)
+		}
+		if h.Handoff && prevASN != "" {
+			line += fmt.Sprintf("  <-- AS handoff (%s -> %s)", prevASN, h.ASN)
+		}
+		if h.ASN != "" {
+			prevASN = h.ASN
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }
 
 func formatTrace(r tracer.Result) string {

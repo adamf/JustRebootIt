@@ -172,3 +172,20 @@ func TestSystemPromptBufferbloatGuidance(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatPathLoss(t *testing.T) {
+	if got := formatPathLoss(nil); got != "" {
+		t.Errorf("empty path should format to empty string, got %q", got)
+	}
+	hops := []tracer.LossHop{
+		{TTL: 1, Addr: "192.168.1.1"},
+		{TTL: 2, Addr: "96.120.0.1", ASN: "7922", ASName: "COMCAST-7922"},
+		{TTL: 3, Addr: "4.2.2.1", Loss: 0.4, ASN: "3356", ASName: "LEVEL3", Handoff: true},
+	}
+	got := formatPathLoss(hops)
+	for _, want := range []string{"hop 01", "hop 03", "AS7922 COMCAST-7922", "loss  40%", "AS handoff (7922 -> 3356)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatPathLoss output missing %q\n%s", want, got)
+		}
+	}
+}

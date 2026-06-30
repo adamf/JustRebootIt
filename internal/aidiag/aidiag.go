@@ -90,6 +90,11 @@ type Event struct {
 	TCPOK      bool
 	DNSLookup  time.Duration
 	DNSOK      bool
+	// PathLoss is the most recent multi-pass per-hop loss + AS attribution for
+	// this target's path (empty unless multi-pass tracing is on for it). It is
+	// surfaced in the prompt so the agent always sees where loss begins on the
+	// path and where the path crosses AS boundaries, without a tool round-trip.
+	PathLoss []tracer.LossHop
 }
 
 // Analysis is the agent's verdict.
