@@ -5,6 +5,7 @@
 package metrics
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -32,7 +33,6 @@ type Metrics struct {
 	hopRTT    *prometheus.GaugeVec
 	hopInfo   *prometheus.GaugeVec
 	hopLoss   *prometheus.GaugeVec
-	hopASN    *prometheus.GaugeVec
 	asHandoff *prometheus.GaugeVec
 	pathLen   *prometheus.GaugeVec
 	reached   *prometheus.GaugeVec
@@ -128,12 +128,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"target", "ttl", "addr"}),
 		hopLoss: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "traceroute_hop_loss_ratio",
-			Help: "Fraction of probes lost at the router answering at the given TTL, over the last multi-pass trace (trace_probes > 1), in [0,1]. NOTE: loss at a single mid-path hop that does not persist to later hops is usually ICMP rate-limiting, not real loss — trust loss that persists across consecutive hops toward the destination.",
-		}, []string{"target", "group", "ttl"}),
-		hopASN: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "traceroute_hop_asn_info",
-			Help: "1 for the origin AS observed at the given TTL on the last trace (labels carry the ASN and AS name).",
-		}, []string{"target", "ttl", "addr", "asn", "as_name"}),
+			Help: "Fraction of probes lost at the hop at the given TTL, over the last multi-pass trace (trace_probes > 1), in [0,1]. Labels carry the hop's address and origin AS so one query describes the whole path. NOTE: loss at a single mid-path hop that does not persist to later hops is usually ICMP rate-limiting, not real loss — trust loss that persists across consecutive hops toward the destination. TTL is the hop number (1 = first hop / your gateway).",
+		}, []string{"target", "group", "ttl", "addr", "asn", "as_name"}),
 		asHandoff: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "traceroute_as_handoff",
 			Help: "1 at a TTL where the path crosses an AS boundary (this hop's ASN differs from the previous responding hop's) — a peering/transit handoff, where congestion and loss often live.",
@@ -263,7 +259,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(
 		m.up, m.sent, m.recv, m.loss,
 		m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
-		m.hopRTT, m.hopInfo, m.hopLoss, m.hopASN, m.asHandoff, m.pathLen, m.reached,
+		m.hopRTT, m.hopInfo, m.hopLoss, m.asHandoff, m.pathLen, m.reached,
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
@@ -308,7 +304,7 @@ func (m *Metrics) ObserveTrace(target, group string, r tracer.Result) {
 	m.hopInfo.DeletePartialMatch(prometheus.Labels{"target": target})
 
 	for _, h := range r.Hops {
-		ttl := strconv.Itoa(h.TTL)
+		ttl := ttlLabel(h.TTL)
 		if h.Timeout || h.Addr == "" {
 			continue
 		}
@@ -328,13 +324,16 @@ func (m *Metrics) ObserveTrace(target, group string, r tracer.Result) {
 // series so hops that disappear (a shorter path, a router that stopped
 // answering, an AS reassignment) don't linger as stale data.
 func (m *Metrics) ObserveHopLoss(target, group string, hops []tracer.LossHop) {
-	for _, v := range []*prometheus.GaugeVec{m.hopRTT, m.hopInfo, m.hopLoss, m.hopASN, m.asHandoff} {
+	for _, v := range []*prometheus.GaugeVec{m.hopRTT, m.hopInfo, m.hopLoss, m.asHandoff} {
 		v.DeletePartialMatch(prometheus.Labels{"target": target})
 	}
 	prevASN := ""
 	for _, h := range hops {
-		ttl := strconv.Itoa(h.TTL)
-		m.hopLoss.WithLabelValues(target, group, ttl).Set(h.Loss)
+		ttl := ttlLabel(h.TTL)
+		// One enriched series per hop carries loss + address + AS, so a single
+		// query describes the whole path (incl. private gateway hops, which have
+		// an address but no public AS).
+		m.hopLoss.WithLabelValues(target, group, ttl, h.Addr, h.ASN, h.ASName).Set(h.Loss)
 		if h.Addr == "" {
 			continue // unresponsive hop: record only its loss
 		}
@@ -343,7 +342,6 @@ func (m *Metrics) ObserveHopLoss(target, group string, hops []tracer.LossHop) {
 			m.hopRTT.WithLabelValues(target, group, ttl).Set(h.RTT.Seconds())
 		}
 		if h.ASN != "" {
-			m.hopASN.WithLabelValues(target, ttl, h.Addr, h.ASN, h.ASName).Set(1)
 			if h.Handoff && prevASN != "" {
 				m.asHandoff.WithLabelValues(target, ttl, prevASN, h.ASN).Set(1)
 			}
@@ -351,6 +349,13 @@ func (m *Metrics) ObserveHopLoss(target, group string, hops []tracer.LossHop) {
 		}
 	}
 	m.pathLen.WithLabelValues(target, group).Set(float64(len(hops)))
+}
+
+// ttlLabel renders a hop's TTL as a fixed-width, zero-padded label ("01".."30")
+// so it sorts numerically as a string in Grafana legends and tables, where a
+// plain "1","10","2" sorts wrong.
+func ttlLabel(ttl int) string {
+	return fmt.Sprintf("%02d", ttl)
 }
 
 // ClearTarget removes all probe, traceroute, and diagnostic series for a
@@ -361,7 +366,7 @@ func (m *Metrics) ClearTarget(target string) {
 	l := prometheus.Labels{"target": target}
 	for _, v := range []*prometheus.GaugeVec{
 		m.up, m.loss, m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
-		m.hopRTT, m.hopInfo, m.hopLoss, m.hopASN, m.asHandoff, m.pathLen, m.reached,
+		m.hopRTT, m.hopInfo, m.hopLoss, m.asHandoff, m.pathLen, m.reached,
 		m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp, m.diagEventID,
 	} {
 		v.DeletePartialMatch(l)

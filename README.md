@@ -567,9 +567,8 @@ Prober (`:9430/metrics`):
 | `probe_packets_sent_total` / `probe_packets_received_total` | counters |
 | `traceroute_hop_rtt_seconds{target,group,ttl}` | RTT to the router at each hop |
 | `traceroute_hop_info{target,ttl,addr}` | the router address seen at each hop |
-| `traceroute_hop_loss_ratio{target,group,ttl}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`) |
-| `traceroute_hop_asn_info{target,ttl,addr,asn,as_name}` | origin AS owning each hop |
-| `traceroute_as_handoff{target,ttl,from_asn,to_asn}` | 1 at a TTL where the path crosses an AS boundary |
+| `traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`); labels carry each hop's address and origin AS |
+| `traceroute_as_handoff{target,ttl,from_asn,to_asn}` | 1 at a TTL (hop) where the path crosses an AS boundary |
 | `traceroute_path_length` / `traceroute_reached` | path length / reached dest |
 | `discovery_selected{target}` | 1 if the candidate is currently promoted to active probing |
 | `discovery_reach_hops{target}` / `discovery_reached{target}` | candidate distance / reachability |
