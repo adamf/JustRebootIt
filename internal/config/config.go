@@ -89,6 +89,27 @@ type Config struct {
 	// Underload configures the latency-under-load (bufferbloat) probe. See
 	// Underload.
 	Underload Underload `yaml:"underload"`
+
+	// Border configures TSLP-style interconnect-congestion probing. See Border.
+	Border Border `yaml:"border"`
+}
+
+// Border configures interconnect (AS-handoff) congestion probing, inspired by
+// CAIDA's Time-Series Latency Probing (TSLP). Middle-mile congestion almost
+// always lives at the peering/transit borders where one network hands off to
+// the next, and it can't be seen from a single endpoint. After each trace, this
+// pings the near side (last hop in one AS) and the far side (first hop in the
+// next) of every AS boundary on the path. Plotted over time, a far-minus-near
+// delay that inflates at peak hours is a congested interconnect — the evidence
+// you take to your ISP. Needs tracing with trace_asn on (that's what finds the
+// boundaries).
+type Border struct {
+	// Enabled turns border probing on (default true).
+	Enabled bool `yaml:"enabled"`
+	// Count is how many echo requests to send to each side per cycle.
+	Count int `yaml:"count"`
+	// Timeout is the per-reply wait for each border ping.
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // Underload configures the latency-under-load probe. A normal ping measures the
@@ -321,7 +342,12 @@ func Default() Config {
 		TraceProbes:   5,
 		TraceASN:      true,
 		TraceGeo:      true,
-		ListenAddr:    ":9430",
+		Border: Border{
+			Enabled: true,
+			Count:   5,
+			Timeout: time.Second,
+		},
+		ListenAddr: ":9430",
 		Discovery: Discovery{
 			Enabled:      true,
 			Interval:     15 * time.Minute,

@@ -32,6 +32,16 @@ trace_asn: true
 # backbone routers. Only active when trace_probes > 1; needs outbound HTTP.
 trace_geo: true
 
+# Interconnect (AS-handoff) congestion probing, à la CAIDA's Time-Series Latency
+# Probing. After each trace, ping the near and far side of every AS boundary on
+# the path; a far-minus-near delay that climbs at peak hours is a congested
+# peering/transit link — middle-mile congestion a single-endpoint test can't
+# see. Needs trace_asn (that's what finds the boundaries).
+border:
+  enabled: true
+  count: 5
+  timeout: 1s
+
 # Prometheus metrics endpoint.
 listen_addr: ":9430"
 

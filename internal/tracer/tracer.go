@@ -74,6 +74,47 @@ type LossHop struct {
 	GeoOK bool
 }
 
+// Boundary is an AS handoff on a path: the last responding hop in one AS (Near)
+// and the first in the next (Far). Probing both sides over time reveals
+// congestion building at the interconnect between them (the TSLP technique).
+type Boundary struct {
+	FromASN  string
+	FromName string
+	ToASN    string
+	ToName   string
+	NearAddr string
+	FarAddr  string
+	TTL      int // the far hop's TTL, for reference
+}
+
+// Boundaries extracts the AS-handoff boundaries from an enriched path, pairing
+// each hop marked Handoff with the preceding hop that still carries the prior
+// AS. Hops with no address or no ASN (private/unresponsive) are skipped, so the
+// pairing matches how Handoff was assigned in the first place.
+func Boundaries(hops []LossHop) []Boundary {
+	var out []Boundary
+	prev := -1
+	for i := range hops {
+		if hops[i].Addr == "" || hops[i].ASN == "" {
+			continue
+		}
+		if hops[i].Handoff && prev >= 0 {
+			p, h := hops[prev], hops[i]
+			out = append(out, Boundary{
+				FromASN:  p.ASN,
+				FromName: p.ASName,
+				ToASN:    h.ASN,
+				ToName:   h.ASName,
+				NearAddr: p.Addr,
+				FarAddr:  h.Addr,
+				TTL:      h.TTL,
+			})
+		}
+		prev = i
+	}
+	return out
+}
+
 // AggregateLoss reduces several traceroute passes to per-TTL loss/RTT. Passes
 // can stop at different TTLs (a pass that reached the destination is shorter), so
 // a TTL's loss is computed only over the passes that actually probed it.

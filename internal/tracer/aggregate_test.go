@@ -52,3 +52,30 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+func TestBoundaries(t *testing.T) {
+	// Path: home(no ASN) -> A(7922) -> A(7922) -> B(6939) -> C(15169). Two
+	// handoffs: 7922->6939 (near = the second 7922 hop) and 6939->15169.
+	hops := []LossHop{
+		{TTL: 0, Addr: "203.0.113.7"},                                         // home anchor, no ASN
+		{TTL: 2, Addr: "96.110.1.1", ASN: "7922", ASName: "Comcast"},          // first AS hop, no handoff
+		{TTL: 3, Addr: "96.110.2.2", ASN: "7922", ASName: "Comcast"},          // near side of first boundary
+		{TTL: 4, Addr: "72.14.1.1", ASN: "6939", ASName: "HE", Handoff: true}, // far side of first boundary
+		{TTL: 5, Addr: "8.8.1.1", ASN: "15169", ASName: "Google", Handoff: true},
+	}
+	got := Boundaries(hops)
+	if len(got) != 2 {
+		t.Fatalf("want 2 boundaries, got %d: %+v", len(got), got)
+	}
+	if got[0].FromASN != "7922" || got[0].ToASN != "6939" || got[0].NearAddr != "96.110.2.2" || got[0].FarAddr != "72.14.1.1" {
+		t.Errorf("boundary 0 wrong: %+v", got[0])
+	}
+	if got[1].FromASN != "6939" || got[1].ToASN != "15169" || got[1].NearAddr != "72.14.1.1" || got[1].FarAddr != "8.8.1.1" {
+		t.Errorf("boundary 1 wrong: %+v", got[1])
+	}
+
+	// No handoffs -> no boundaries.
+	if b := Boundaries([]LossHop{{TTL: 1, Addr: "96.110.1.1", ASN: "7922"}}); len(b) != 0 {
+		t.Errorf("want no boundaries, got %+v", b)
+	}
+}

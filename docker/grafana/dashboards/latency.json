@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 4,
+  "version": 5,
   "weekStart": "",
   "panels": [
     {
@@ -1448,6 +1448,72 @@
           }
         },
         { "id": "sortBy", "options": { "sort": [{ "field": "hop", "desc": false }] } }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 74,
+      "title": "Interconnect congestion (AS borders) — $target",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 184 }
+    },
+    {
+      "type": "timeseries",
+      "id": 75,
+      "title": "Border latency — near vs far — $target",
+      "description": "TSLP interconnect probe. For each AS-handoff boundary on the path, the near side (last hop in the previous AS) and far side (first hop in the next) are pinged every trace cycle. Watch the far line pull away from the near line — especially on a daily 'worse at night' rhythm: that widening gap is a queue building at the peering/transit link between those two networks, i.e. middle-mile congestion you can't see from either endpoint alone. Flat/parallel lines mean the interconnect is healthy.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 185 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*far.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*near.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_border_rtt_seconds{target=~\"$target\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} · {{side}} ({{addr}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 76,
+      "title": "Border packet loss — $target",
+      "description": "Packet loss pinging each side of an AS-handoff boundary. Loss that shows up on the far side and persists (not a lone spike) points to a congested or failing interconnect. Pair it with the latency panel: rising far-side latency + far-side loss at peak hours is the classic middle-mile-congestion signature.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 185 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "auto", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.1 }] },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_border_loss_ratio{target=~\"$target\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} · {{side}} ({{addr}})",
+          "refId": "A"
+        }
       ]
     }
   ]

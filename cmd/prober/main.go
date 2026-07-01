@@ -527,6 +527,7 @@ func (a *app) traceOnce(ctx context.Context, t config.Target) {
 	hops = a.anchorPath(ctx, hops)
 	a.m.ObserveHopLoss(t.Name, t.Group, hops)
 	a.recordHops(t.Name, reach)
+	a.probeBorders(ctx, t, hops)
 
 	a.pathMu.Lock()
 	a.lastPath[t.Name] = hops
@@ -592,6 +593,65 @@ func (a *app) anchorPath(ctx context.Context, hops []tracer.LossHop) []tracer.Lo
 		}
 	}
 	return out
+}
+
+// probeBorders runs the interconnect (TSLP) probe: for every AS-handoff boundary
+// on the freshly traced path it pings the near side (last hop in the previous
+// AS) and the far side (first hop in the next), publishing RTT + loss per side.
+// A far-minus-near delay that grows at peak hours is a congested peering/transit
+// link — the thing a single-endpoint test can't see. No-op unless border probing
+// and AS resolution are both on.
+func (a *app) probeBorders(ctx context.Context, t config.Target, hops []tracer.LossHop) {
+	if !a.cfg.Border.Enabled || !a.cfg.TraceASN {
+		return
+	}
+	bounds := tracer.Boundaries(hops)
+	if len(bounds) == 0 {
+		a.m.ObserveBorders(t.Name, nil) // clear any stale borders for this target
+		return
+	}
+
+	// One probe per (boundary, side). A router that is the far side of one
+	// boundary and the near side of the next is pinged for each role — cheap, and
+	// it keeps every series self-describing.
+	type probe struct{ fromASN, toASN, side, addr string }
+	var probes []probe
+	for _, b := range bounds {
+		probes = append(probes,
+			probe{b.FromASN, b.ToASN, "near", b.NearAddr},
+			probe{b.FromASN, b.ToASN, "far", b.FarAddr},
+		)
+	}
+
+	count := a.cfg.Border.Count
+	if count < 1 {
+		count = 1
+	}
+	window := a.cfg.Border.Timeout * time.Duration(count)
+	if window < a.cfg.Border.Timeout {
+		window = a.cfg.Border.Timeout
+	}
+
+	samples := make([]metrics.BorderSample, len(probes))
+	var wg sync.WaitGroup
+	for i := range probes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := probes[i]
+			res := pinger.New(p.addr, count, a.cfg.Border.Timeout, a.cfg.Privileged).Run(ctx, window)
+			s := metrics.BorderSample{FromASN: p.fromASN, ToASN: p.toASN, Side: p.side, Addr: p.addr, Loss: res.Loss}
+			if res.Recv > 0 {
+				s.RTT = res.Median
+			}
+			samples[i] = s
+		}(i)
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return
+	}
+	a.m.ObserveBorders(t.Name, samples)
 }
 
 // enrichGeo geolocates each responding hop so the path can be mapped. No-op when
