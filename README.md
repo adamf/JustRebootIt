@@ -239,6 +239,13 @@ attributed to its **origin AS** (via Team Cymru DNS) and the prober marks
 handoffs where congestion lives. (Per-cycle loss resolution is 1/`trace_probes`,
 refined over time by averaging cycles.)
 
+The traceroute is **Paris-style**: it holds the ICMP checksum constant across
+every probe (all TTLs, all passes) so per-flow ECMP load-balancers route them
+down a single path. Classic traceroute varies the sequence number — and thus the
+checksum — per probe, which scatters probes across parallel links and invents
+*phantom* loss and duplicate hops. Keeping the flow identifier fixed measures
+loss on one real path instead.
+
 The bottom **"Path packet loss & AS boundaries"** row graphs per-hop loss and
 lists the AS path. The one interpretation rule that matters: **loss at a single
 mid-path hop that doesn't continue to later hops is just that router
@@ -260,6 +267,12 @@ congestion"** panels, a far-minus-near delay that **inflates at peak hours** —
 often with far-side loss — is a congested interconnect: the evidence you take to
 your ISP. This is a lightweight take on CAIDA's Time-Series Latency Probing
 (TSLP). It needs `trace_asn` on (that's what finds the boundaries).
+
+The **"Time-of-day pattern"** row pins bufferbloat and far-side interconnect
+latency to a **7-day window**, because congestion is a clock: if the humps line
+up with evenings and weekends, your link (bufferbloat peaking) or a peering link
+(border latency peaking) is saturating at peak — oversubscription, not a random
+glitch. Whichever panel peaks tells you *where* on the path the clock is ticking.
 
 ### Triggered diagnostics — deeper tests during a spike
 

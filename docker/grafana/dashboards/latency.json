@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 6,
+  "version": 7,
   "weekStart": "",
   "panels": [
     {
@@ -1433,6 +1433,70 @@
           "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
           "expr": "traceroute_border_loss_ratio{target=~\"$target\"}",
           "legendFormat": "{{from_asn}}→{{to_asn}} · {{side}} ({{addr}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 77,
+      "title": "Time-of-day pattern — is it worse at night?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 194 }
+    },
+    {
+      "type": "timeseries",
+      "id": 78,
+      "title": "Bufferbloat over the last 7 days",
+      "description": "Loaded-minus-idle latency (the bufferbloat that stutters streams), forced to a 7-day window so the daily rhythm is visible. Congestion is a clock: if the humps line up with evenings/weekends, your link is saturating at peak — oversubscription or an under-provisioned SQM, not a random glitch. Flat = no time-of-day pattern.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 195 },
+      "timeFrom": "7d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 15, "gradientMode": "opacity", "showPoints": "never", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.1 }] },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_rtt_increase_seconds",
+          "legendFormat": "{{target}} · {{direction}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 79,
+      "title": "Interconnect far-side latency over the last 7 days — $target",
+      "description": "Far-side latency of each AS-handoff boundary (from the TSLP border probe), forced to a 7-day window. A far-side line that swells every evening is a peering/transit link congesting at peak — the middle-mile version of the same 'congestion is a clock' story. Compare its timing with the bufferbloat panel: bufferbloat peaking = your access link; border latency peaking = deeper in the path.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 195 },
+      "timeFrom": "7d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "gradientMode": "opacity", "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_border_rtt_seconds{target=~\"$target\", side=\"far\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} ({{addr}})",
           "refId": "A"
         }
       ]

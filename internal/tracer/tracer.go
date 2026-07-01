@@ -227,10 +227,21 @@ func (t *Tracer) probeHop(ctx context.Context, conn *icmp.PacketConn, p4 *ipv4.P
 	}
 
 	seq := ttl
+	data := []byte("justrebootit")
+	if t.privileged {
+		// Paris-style probing: hold the ICMP checksum constant across every probe
+		// (all TTLs, all passes) so per-flow ECMP load-balancers route them down a
+		// single path. Classic traceroute varies the sequence number — and thus
+		// the checksum — per probe, scattering probes across parallel links and
+		// inventing phantom loss / duplicate hops. Only meaningful on raw sockets,
+		// where our bytes reach the wire unaltered (datagram ICMP lets the kernel
+		// rewrite the id and checksum).
+		data = parisPayload(t.id, seq)
+	}
 	msg := icmp.Message{
 		Type: ipv4.ICMPTypeEcho,
 		Code: 0,
-		Body: &icmp.Echo{ID: t.id, Seq: seq, Data: []byte("justrebootit")},
+		Body: &icmp.Echo{ID: t.id, Seq: seq, Data: data},
 	}
 	wb, err := msg.Marshal(nil)
 	if err != nil {
@@ -288,6 +299,23 @@ func (t *Tracer) probeHop(ctx context.Context, conn *icmp.PacketConn, p4 *ipv4.P
 			continue
 		}
 	}
+}
+
+// parisPayload builds the echo payload for Paris-style tracing: a fixed tag plus
+// two compensation words that cancel the id and sequence number out of the ICMP
+// checksum. A 16-bit word W and its complement ^W sum to 0xFFFF, which is a
+// no-op (negative zero) in the ones-complement Internet checksum — so embedding
+// ^seq and ^id makes the checksum independent of both, i.e. constant across
+// every probe. With the checksum fixed, per-flow ECMP hashing sends all probes
+// down one path. The id and seq still travel in the ICMP header (and are quoted
+// back in TTL-exceeded errors), so reply matching is unchanged.
+func parisPayload(id, seq int) []byte {
+	b := make([]byte, 12, 16)
+	copy(b, "justrebootit")
+	var comp [4]byte
+	binary.BigEndian.PutUint16(comp[0:2], ^uint16(seq))
+	binary.BigEndian.PutUint16(comp[2:4], ^uint16(id))
+	return append(b, comp[:]...)
 }
 
 // sameIP reports whether a reply's source address is the traced destination.
