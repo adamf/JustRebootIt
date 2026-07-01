@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 3,
+  "version": 4,
   "weekStart": "",
   "panels": [
     {
@@ -1381,7 +1381,7 @@
       "type": "geomap",
       "id": 81,
       "title": "Traceroute path, coloured by loss — $target",
-      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number. Hop 0 is 'home' — your public IP's location — so the path starts at you, not the first backbone router. The highest number is the destination (end). The line walks the path between them. Hover any dot for its address, AS, and loss. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private gateway/LAN hops are dropped (no public geolocation, and their loss isn't real path loss), as is any hop with no usable fix. Needs trace_probes > 1 and trace_geo (default on).",
+      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number. Hop 0 is 'home' — your public IP's location — so the path starts at you, not the first backbone router. The highest number is the destination (end). Read the numbers in order (0, 1, 2 …) to follow the direction of travel — the faint line just connects consecutive hops and will zig-zag, because backbone routers geolocate to their registration city (often an HQ far from where the traffic physically is), not their real location. It is a rough 'which metros does my traffic touch' picture, not a literal route. Hover any dot for its address, AS, and loss. A red dot far from home is a backbone/peering hop dropping packets. Private gateway/LAN hops are dropped (no public geolocation, and their loss isn't real path loss), as is any hop with no usable fix. Needs trace_probes > 1 and trace_geo (default on).",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
       "gridPos": { "h": 14, "w": 24, "x": 0, "y": 169 },
       "fieldConfig": {
@@ -1407,7 +1407,7 @@
             "type": "route",
             "name": "path",
             "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": { "style": { "color": { "field": "loss", "fixed": "dark-green" }, "lineWidth": 1, "opacity": 0.5 } },
+            "config": { "style": { "color": { "fixed": "light-green" }, "lineWidth": 1, "opacity": 0.25 } },
             "tooltip": false
           },
           {
@@ -1415,15 +1415,17 @@
             "name": "hops",
             "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
             "config": {
+              "showLegend": true,
               "style": {
                 "color": { "field": "loss", "fixed": "dark-green" },
-                "size": { "fixed": 6 },
+                "size": { "fixed": 9 },
                 "opacity": 0.9,
                 "symbol": { "mode": "fixed", "fixed": "img/icons/marker/circle.svg" },
-                "text": { "field": "hop", "fixed": "" },
-                "textConfig": { "fontSize": 11, "textAlign": "left", "textBaseline": "middle", "offsetX": 7, "offsetY": 0 }
+                "text": { "mode": "field", "field": "hop", "fixed": "" },
+                "textConfig": { "fontSize": 12, "textAlign": "left", "textBaseline": "middle", "offsetX": 8, "offsetY": 0 }
               }
-            }
+            },
+            "tooltip": true
           }
         ]
       },
