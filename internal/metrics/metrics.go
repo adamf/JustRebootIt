@@ -37,6 +37,9 @@ type Metrics struct {
 	pathLen   *prometheus.GaugeVec
 	reached   *prometheus.GaugeVec
 
+	borderRTT  *prometheus.GaugeVec
+	borderLoss *prometheus.GaugeVec
+
 	discSelected  *prometheus.GaugeVec
 	discReachHops *prometheus.GaugeVec
 	discReached   *prometheus.GaugeVec
@@ -133,12 +136,20 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"target", "ttl", "addr"}),
 		hopLoss: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "traceroute_hop_loss_ratio",
-			Help: "Fraction of probes lost at the hop at the given TTL, over the last multi-pass trace (trace_probes > 1), in [0,1]. Labels carry the hop's address, origin AS, and approximate lat/lon so one query describes (and maps) the whole path. NOTE: loss at a single mid-path hop that does not persist to later hops is usually ICMP rate-limiting, not real loss — trust loss that persists across consecutive hops toward the destination. TTL is the hop number (1 = first hop / your gateway).",
-		}, []string{"target", "group", "ttl", "addr", "asn", "as_name", "lat", "lon"}),
+			Help: "Fraction of probes lost at the hop at the given TTL, over the last multi-pass trace (trace_probes > 1), in [0,1]. Labels carry the hop's address and origin AS so one query describes the whole path. NOTE: loss at a single mid-path hop that does not persist to later hops is usually ICMP rate-limiting, not real loss — trust loss that persists across consecutive hops toward the destination. TTL is the hop number (1 = first hop / your gateway).",
+		}, []string{"target", "group", "ttl", "addr", "asn", "as_name"}),
 		asHandoff: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "traceroute_as_handoff",
 			Help: "1 at a TTL where the path crosses an AS boundary (this hop's ASN differs from the previous responding hop's) — a peering/transit handoff, where congestion and loss often live.",
 		}, []string{"target", "ttl", "from_asn", "to_asn"}),
+		borderRTT: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "traceroute_border_rtt_seconds",
+			Help: "Median RTT to one side of an AS-handoff boundary on the path (side=near is the last hop in the previous AS, side=far is the first hop in the next). Watch far minus near over time: a delay that inflates at peak hours is congestion building at that interconnect (TSLP).",
+		}, []string{"target", "from_asn", "to_asn", "side", "addr"}),
+		borderLoss: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "traceroute_border_loss_ratio",
+			Help: "Packet loss pinging one side of an AS-handoff boundary, in [0,1]. Loss that appears on the far side and persists is a congested/failing interconnect.",
+		}, []string{"target", "from_asn", "to_asn", "side", "addr"}),
 		pathLen: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "traceroute_path_length",
 			Help: "Number of hops in the most recent traceroute.",
@@ -270,6 +281,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.up, m.sent, m.recv, m.loss,
 		m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
 		m.hopRTT, m.hopInfo, m.hopLoss, m.asHandoff, m.pathLen, m.reached,
+		m.borderRTT, m.borderLoss,
 		m.discSelected, m.discReachHops, m.discReached,
 		m.diagTriggered, m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp,
 		m.diagEventID, m.aiAnalyzed, m.aiFailed, m.aiSuppressed,
@@ -347,15 +359,10 @@ func (m *Metrics) ObserveHopLoss(target, group string, hops []tracer.LossHop) {
 	prevASN := ""
 	for _, h := range hops {
 		ttl := ttlLabel(h.TTL)
-		// One enriched series per hop carries loss + address + AS + coordinates,
-		// so a single query describes (and maps) the whole path, including private
-		// gateway hops (which have an address but no public AS or geolocation).
-		lat, lon := "", ""
-		if h.GeoOK {
-			lat = ftoa(h.Lat)
-			lon = ftoa(h.Lon)
-		}
-		m.hopLoss.WithLabelValues(target, group, ttl, h.Addr, h.ASN, h.ASName, lat, lon).Set(h.Loss)
+		// One enriched series per hop carries loss + address + AS, so a single
+		// query describes the whole path, including private gateway hops (which
+		// have an address but no public AS).
+		m.hopLoss.WithLabelValues(target, group, ttl, h.Addr, h.ASN, h.ASName).Set(h.Loss)
 		if h.Addr == "" {
 			continue // unresponsive hop: record only its loss
 		}
@@ -373,8 +380,31 @@ func (m *Metrics) ObserveHopLoss(target, group string, hops []tracer.LossHop) {
 	m.pathLen.WithLabelValues(target, group).Set(float64(len(hops)))
 }
 
-// ftoa renders a coordinate as a fixed-precision metric-label string.
-func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 4, 64) }
+// BorderSample is one side of one AS-handoff boundary, probed for RTT and loss.
+type BorderSample struct {
+	FromASN string
+	ToASN   string
+	Side    string // "near" or "far"
+	Addr    string
+	RTT     time.Duration
+	Loss    float64
+}
+
+// ObserveBorders publishes the interconnect (AS-handoff) probe results for a
+// target. It clears the target's prior border series first so boundaries that
+// disappear as the path shifts don't linger as stale data. Samples with no
+// reply (RTT == 0) publish loss only, leaving the latency gauge absent rather
+// than reporting a false 0ms.
+func (m *Metrics) ObserveBorders(target string, samples []BorderSample) {
+	m.borderRTT.DeletePartialMatch(prometheus.Labels{"target": target})
+	m.borderLoss.DeletePartialMatch(prometheus.Labels{"target": target})
+	for _, s := range samples {
+		m.borderLoss.WithLabelValues(target, s.FromASN, s.ToASN, s.Side, s.Addr).Set(s.Loss)
+		if s.RTT > 0 {
+			m.borderRTT.WithLabelValues(target, s.FromASN, s.ToASN, s.Side, s.Addr).Set(s.RTT.Seconds())
+		}
+	}
+}
 
 // ttlLabel renders a hop's TTL as a fixed-width, zero-padded label ("01".."30")
 // so it sorts numerically as a string in Grafana legends and tables, where a
@@ -392,6 +422,7 @@ func (m *Metrics) ClearTarget(target string) {
 	for _, v := range []*prometheus.GaugeVec{
 		m.up, m.loss, m.rttBest, m.rttWorst, m.rttMedian, m.rttMean, m.rttStdDev, m.rttPct,
 		m.hopRTT, m.hopInfo, m.hopLoss, m.asHandoff, m.pathLen, m.reached,
+		m.borderRTT, m.borderLoss,
 		m.diagTCPConnect, m.diagTCPUp, m.diagDNSLookup, m.diagDNSUp, m.diagEventID,
 	} {
 		v.DeletePartialMatch(l)

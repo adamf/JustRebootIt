@@ -34,7 +34,6 @@ import (
 	"github.com/adamf/justrebootit/internal/config"
 	"github.com/adamf/justrebootit/internal/diag"
 	"github.com/adamf/justrebootit/internal/discovery"
-	"github.com/adamf/justrebootit/internal/geo"
 	"github.com/adamf/justrebootit/internal/grafana"
 	"github.com/adamf/justrebootit/internal/metrics"
 	"github.com/adamf/justrebootit/internal/pinger"
@@ -210,9 +209,6 @@ type app struct {
 	// asnResolver maps hop IPs to their origin AS (cached) so multi-pass traces
 	// can mark AS-handoff boundaries on the path.
 	asnResolver *asn.Resolver
-	// geoResolver maps hop IPs to an approximate location (cached) so the path
-	// can be plotted on a map.
-	geoResolver *geo.Resolver
 	// lastPath holds the most recent multi-pass per-hop loss + AS attribution per
 	// target, so a diagnosis event can carry the path picture to the AI without a
 	// tool round-trip. Guarded by pathMu.
@@ -273,7 +269,6 @@ func newApp(ctx context.Context, cfg config.Config, m *metrics.Metrics) *app {
 		discovered:  make(map[string]context.CancelFunc),
 		reachHops:   make(map[string]int),
 		asnResolver: asn.New(0),
-		geoResolver: geo.New(0),
 		lastPath:    make(map[string][]tracer.LossHop),
 	}
 }
@@ -523,10 +518,10 @@ func (a *app) traceOnce(ctx context.Context, t config.Target) {
 	}
 	hops := tracer.AggregateLoss(got)
 	a.enrichASN(ctx, hops)
-	a.enrichGeo(ctx, hops)
-	hops = a.anchorPath(ctx, hops)
+	hops = pruneLocalHops(hops)
 	a.m.ObserveHopLoss(t.Name, t.Group, hops)
 	a.recordHops(t.Name, reach)
+	a.probeBorders(ctx, t, hops)
 
 	a.pathMu.Lock()
 	a.lastPath[t.Name] = hops
@@ -565,49 +560,92 @@ func (a *app) enrichASN(ctx context.Context, hops []tracer.LossHop) {
 	}
 }
 
-// anchorPath prepares an enriched path for loss display and mapping. It drops
-// the leading private hops — your own LAN/gateway, which aren't real path loss
-// and can't be geolocated — so loss isn't tracked for them, and (when our public
-// IP can be located) prepends a "home" hop so the mapped path starts at your
-// location instead of the first backbone router that happens to geolocate.
-func (a *app) anchorPath(ctx context.Context, hops []tracer.LossHop) []tracer.LossHop {
+// pruneLocalHops drops the leading private hops — your own LAN/gateway, which
+// aren't real path loss — so loss isn't tracked or displayed for them.
+func pruneLocalHops(hops []tracer.LossHop) []tracer.LossHop {
 	i := 0
-	for i < len(hops) && geo.IsPrivate(hops[i].Addr) {
+	for i < len(hops) && isPrivateAddr(hops[i].Addr) {
 		i++
 	}
-	out := hops[i:]
-
-	if a.cfg.TraceGeo && a.geoResolver != nil {
-		if home := a.geoResolver.Self(ctx); home.OK {
-			anchor := tracer.LossHop{
-				TTL:   0,
-				Addr:  home.IP,
-				City:  home.City,
-				Lat:   home.Lat,
-				Lon:   home.Lon,
-				GeoOK: true,
-			}
-			// Fresh slice so we don't clobber the trimmed hops' backing array.
-			out = append([]tracer.LossHop{anchor}, out...)
-		}
-	}
-	return out
+	return hops[i:]
 }
 
-// enrichGeo geolocates each responding hop so the path can be mapped. No-op when
-// geolocation is disabled.
-func (a *app) enrichGeo(ctx context.Context, hops []tracer.LossHop) {
-	if !a.cfg.TraceGeo || a.geoResolver == nil {
+// isPrivateAddr reports whether a textual address is private/bogon/loopback
+// (your gateway, CGNAT). Unparseable input — e.g. an unresponsive hop with no
+// address — is treated as not private.
+func isPrivateAddr(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return true
+	}
+	for _, c := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"} {
+		if _, n, _ := net.ParseCIDR(c); n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// probeBorders runs the interconnect (TSLP) probe: for every AS-handoff boundary
+// on the freshly traced path it pings the near side (last hop in the previous
+// AS) and the far side (first hop in the next), publishing RTT + loss per side.
+// A far-minus-near delay that grows at peak hours is a congested peering/transit
+// link — the thing a single-endpoint test can't see. No-op unless border probing
+// and AS resolution are both on.
+func (a *app) probeBorders(ctx context.Context, t config.Target, hops []tracer.LossHop) {
+	if !a.cfg.Border.Enabled || !a.cfg.TraceASN {
 		return
 	}
-	for i := range hops {
-		if hops[i].Addr == "" {
-			continue
-		}
-		if loc := a.geoResolver.Lookup(ctx, hops[i].Addr); loc.OK {
-			hops[i].Lat, hops[i].Lon, hops[i].City, hops[i].GeoOK = loc.Lat, loc.Lon, loc.City, true
-		}
+	bounds := tracer.Boundaries(hops)
+	if len(bounds) == 0 {
+		a.m.ObserveBorders(t.Name, nil) // clear any stale borders for this target
+		return
 	}
+
+	// One probe per (boundary, side). A router that is the far side of one
+	// boundary and the near side of the next is pinged for each role — cheap, and
+	// it keeps every series self-describing.
+	type probe struct{ fromASN, toASN, side, addr string }
+	var probes []probe
+	for _, b := range bounds {
+		probes = append(probes,
+			probe{b.FromASN, b.ToASN, "near", b.NearAddr},
+			probe{b.FromASN, b.ToASN, "far", b.FarAddr},
+		)
+	}
+
+	count := a.cfg.Border.Count
+	if count < 1 {
+		count = 1
+	}
+	window := a.cfg.Border.Timeout * time.Duration(count)
+	if window < a.cfg.Border.Timeout {
+		window = a.cfg.Border.Timeout
+	}
+
+	samples := make([]metrics.BorderSample, len(probes))
+	var wg sync.WaitGroup
+	for i := range probes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := probes[i]
+			res := pinger.New(p.addr, count, a.cfg.Border.Timeout, a.cfg.Privileged).Run(ctx, window)
+			s := metrics.BorderSample{FromASN: p.fromASN, ToASN: p.toASN, Side: p.side, Addr: p.addr, Loss: res.Loss}
+			if res.Recv > 0 {
+				s.RTT = res.Median
+			}
+			samples[i] = s
+		}(i)
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return
+	}
+	a.m.ObserveBorders(t.Name, samples)
 }
 
 // maybeDiagnose feeds a cycle's result to the detector and, on an anomaly,

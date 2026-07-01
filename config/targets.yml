@@ -27,10 +27,16 @@ trace_probes: 5
 # (peering/transit handoffs, where congestion lives). Only active when
 # trace_probes > 1. Needs outbound DNS.
 trace_asn: true
-# Geolocate each hop (free ip-api.com service) so the dashboard's "Path map"
-# panel can plot the traced paths coloured by loss. Approximate, especially for
-# backbone routers. Only active when trace_probes > 1; needs outbound HTTP.
-trace_geo: true
+
+# Interconnect (AS-handoff) congestion probing, à la CAIDA's Time-Series Latency
+# Probing. After each trace, ping the near and far side of every AS boundary on
+# the path; a far-minus-near delay that climbs at peak hours is a congested
+# peering/transit link — middle-mile congestion a single-endpoint test can't
+# see. Needs trace_asn (that's what finds the boundaries).
+border:
+  enabled: true
+  count: 5
+  timeout: 1s
 
 # Prometheus metrics endpoint.
 listen_addr: ":9430"

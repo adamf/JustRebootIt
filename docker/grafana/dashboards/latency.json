@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 3,
+  "version": 7,
   "weekStart": "",
   "panels": [
     {
@@ -1373,79 +1373,132 @@
     },
     {
       "type": "row",
-      "id": 80,
-      "title": "Path map — $target",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 168 }
+      "id": 74,
+      "title": "Interconnect congestion (AS borders) — $target",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 184 }
     },
     {
-      "type": "geomap",
-      "id": 81,
-      "title": "Traceroute path, coloured by loss — $target",
-      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number. Hop 0 is 'home' — your public IP's location — so the path starts at you, not the first backbone router. The highest number is the destination (end). The line walks the path between them. Hover any dot for its address, AS, and loss. A red dot far from home where the line crosses the country is a backbone/peering hop dropping packets. Private gateway/LAN hops are dropped (no public geolocation, and their loss isn't real path loss), as is any hop with no usable fix. Needs trace_probes > 1 and trace_geo (default on).",
+      "type": "timeseries",
+      "id": 75,
+      "title": "Border latency — near vs far — $target",
+      "description": "TSLP interconnect probe. For each AS-handoff boundary on the path, the near side (last hop in the previous AS) and far side (first hop in the next) are pinged every trace cycle. Watch the far line pull away from the near line — especially on a daily 'worse at night' rhythm: that widening gap is a queue building at the peering/transit link between those two networks, i.e. middle-mile congestion you can't see from either endpoint alone. Flat/parallel lines mean the interconnect is healthy.",
       "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 169 },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 185 },
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never", "spanNulls": true }
+        },
         "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "loss" },
-            "properties": [
-              { "id": "unit", "value": "percentunit" },
-              { "id": "color", "value": { "mode": "thresholds" } },
-              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "orange", "value": 0.2 }, { "color": "red", "value": 0.5 }] } }
-            ]
-          }
+          { "matcher": { "id": "byRegexp", "options": ".*far.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*near.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
         ]
       },
       "options": {
-        "basemap": { "type": "default", "name": "Basemap" },
-        "view": { "id": "coords", "lat": 39.5, "lon": -96, "zoom": 4 },
-        "controls": { "showZoom": true, "mouseWheelZoom": true, "showAttribution": true, "showScale": false, "showMeasure": false, "showDebug": false },
-        "tooltip": { "mode": "details" },
-        "layers": [
-          {
-            "type": "route",
-            "name": "path",
-            "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": { "style": { "color": { "field": "loss", "fixed": "dark-green" }, "lineWidth": 1, "opacity": 0.5 } },
-            "tooltip": false
-          },
-          {
-            "type": "markers",
-            "name": "hops",
-            "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": {
-              "style": {
-                "color": { "field": "loss", "fixed": "dark-green" },
-                "size": { "fixed": 6 },
-                "opacity": 0.9,
-                "symbol": { "mode": "fixed", "fixed": "img/icons/marker/circle.svg" },
-                "text": { "field": "hop", "fixed": "" },
-                "textConfig": { "fontSize": 11, "textAlign": "left", "textBaseline": "middle", "offsetX": 7, "offsetY": 0 }
-              }
-            }
-          }
-        ]
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-          "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
-          "format": "table",
-          "instant": true,
+          "expr": "traceroute_border_rtt_seconds{target=~\"$target\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} · {{side}} ({{addr}})",
           "refId": "A"
         }
-      ],
-      "transformations": [
-        { "id": "convertFieldType", "options": { "conversions": [{ "targetField": "lat", "destinationType": "number" }, { "targetField": "lon", "destinationType": "number" }] } },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": { "Time": true, "target": true, "group": true, "__name__": true, "job": true, "instance": true },
-            "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value": "loss" }
-          }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 76,
+      "title": "Border packet loss — $target",
+      "description": "Packet loss pinging each side of an AS-handoff boundary. Loss that shows up on the far side and persists (not a lone spike) points to a congested or failing interconnect. Pair it with the latency panel: rising far-side latency + far-side loss at peak hours is the classic middle-mile-congestion signature.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 185 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "auto", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.1 }] },
+          "color": { "mode": "thresholds" }
         },
-        { "id": "sortBy", "options": { "sort": [{ "field": "hop", "desc": false }] } }
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_border_loss_ratio{target=~\"$target\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} · {{side}} ({{addr}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 77,
+      "title": "Time-of-day pattern — is it worse at night?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 194 }
+    },
+    {
+      "type": "timeseries",
+      "id": 78,
+      "title": "Bufferbloat over the last 7 days",
+      "description": "Loaded-minus-idle latency (the bufferbloat that stutters streams), forced to a 7-day window so the daily rhythm is visible. Congestion is a clock: if the humps line up with evenings/weekends, your link is saturating at peak — oversubscription or an under-provisioned SQM, not a random glitch. Flat = no time-of-day pattern.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 195 },
+      "timeFrom": "7d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 15, "gradientMode": "opacity", "showPoints": "never", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.1 }] },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "underload_rtt_increase_seconds",
+          "legendFormat": "{{target}} · {{direction}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 79,
+      "title": "Interconnect far-side latency over the last 7 days — $target",
+      "description": "Far-side latency of each AS-handoff boundary (from the TSLP border probe), forced to a 7-day window. A far-side line that swells every evening is a peering/transit link congesting at peak — the middle-mile version of the same 'congestion is a clock' story. Compare its timing with the bufferbloat panel: bufferbloat peaking = your access link; border latency peaking = deeper in the path.",
+      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 195 },
+      "timeFrom": "7d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "gradientMode": "opacity", "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
+          "expr": "traceroute_border_rtt_seconds{target=~\"$target\", side=\"far\"}",
+          "legendFormat": "{{from_asn}}→{{to_asn}} ({{addr}})",
+          "refId": "A"
+        }
       ]
     }
   ]
