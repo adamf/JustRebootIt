@@ -90,7 +90,7 @@
   "timezone": "browser",
   "title": "Home Internet Latency",
   "uid": "justrebootit-home-latency",
-  "version": 5,
+  "version": 6,
   "weekStart": "",
   "panels": [
     {
@@ -1366,85 +1366,6 @@
             "excludeByName": { "Time": true, "target": true, "group": true, "Value": false, "__name__": true, "job": true, "instance": true },
             "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value": "loss" },
             "indexByName": { "ttl": 0, "addr": 1, "asn": 2, "as_name": 3, "Value": 4 }
-          }
-        },
-        { "id": "sortBy", "options": { "sort": [{ "field": "hop", "desc": false }] } }
-      ]
-    },
-    {
-      "type": "row",
-      "id": 80,
-      "title": "Path map — $target",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 168 }
-    },
-    {
-      "type": "geomap",
-      "id": 81,
-      "title": "Traceroute path, coloured by loss — $target",
-      "description": "Each hop on the path to $target geolocated (approximate — backbone routers especially) and plotted: dots are hops coloured by packet loss (green = none, red = high) and labelled with the hop number. Hop 0 is 'home' — your public IP's location — so the path starts at you, not the first backbone router. The highest number is the destination (end). Read the numbers in order (0, 1, 2 …) to follow the direction of travel — the faint line just connects consecutive hops and will zig-zag, because backbone routers geolocate to their registration city (often an HQ far from where the traffic physically is), not their real location. It is a rough 'which metros does my traffic touch' picture, not a literal route. Hover any dot for its address, AS, and loss. A red dot far from home is a backbone/peering hop dropping packets. Private gateway/LAN hops are dropped (no public geolocation, and their loss isn't real path loss), as is any hop with no usable fix. Needs trace_probes > 1 and trace_geo (default on).",
-      "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 169 },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "loss" },
-            "properties": [
-              { "id": "unit", "value": "percentunit" },
-              { "id": "color", "value": { "mode": "thresholds" } },
-              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "orange", "value": 0.2 }, { "color": "red", "value": 0.5 }] } }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "basemap": { "type": "default", "name": "Basemap" },
-        "view": { "id": "coords", "lat": 39.5, "lon": -96, "zoom": 4 },
-        "controls": { "showZoom": true, "mouseWheelZoom": true, "showAttribution": true, "showScale": false, "showMeasure": false, "showDebug": false },
-        "tooltip": { "mode": "details" },
-        "layers": [
-          {
-            "type": "route",
-            "name": "path",
-            "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": { "style": { "color": { "fixed": "light-green" }, "lineWidth": 1, "opacity": 0.25 } },
-            "tooltip": false
-          },
-          {
-            "type": "markers",
-            "name": "hops",
-            "location": { "mode": "coords", "latitude": "lat", "longitude": "lon" },
-            "config": {
-              "showLegend": true,
-              "style": {
-                "color": { "field": "loss", "fixed": "dark-green" },
-                "size": { "fixed": 9 },
-                "opacity": 0.9,
-                "symbol": { "mode": "fixed", "fixed": "img/icons/marker/circle.svg" },
-                "text": { "mode": "field", "field": "hop", "fixed": "" },
-                "textConfig": { "fontSize": 12, "textAlign": "left", "textBaseline": "middle", "offsetX": 8, "offsetY": 0 }
-              }
-            },
-            "tooltip": true
-          }
-        ]
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "justrebootit-prometheus" },
-          "expr": "traceroute_hop_loss_ratio{target=~\"$target\"}",
-          "format": "table",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "transformations": [
-        { "id": "convertFieldType", "options": { "conversions": [{ "targetField": "lat", "destinationType": "number" }, { "targetField": "lon", "destinationType": "number" }] } },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": { "Time": true, "target": true, "group": true, "__name__": true, "job": true, "instance": true },
-            "renameByName": { "ttl": "hop", "addr": "address", "asn": "ASN", "as_name": "AS name", "Value": "loss" }
           }
         },
         { "id": "sortBy", "options": { "sort": [{ "field": "hop", "desc": false }] } }

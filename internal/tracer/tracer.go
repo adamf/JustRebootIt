@@ -65,13 +65,6 @@ type LossHop struct {
 	ASN     string
 	ASName  string
 	Handoff bool
-	// Lat/Lon/City are an approximate geolocation of Addr, filled in by the
-	// caller (via a geo resolver), used to plot the path on a map. GeoOK is false
-	// when there is no fix (private hops, lookup failures).
-	Lat   float64
-	Lon   float64
-	City  string
-	GeoOK bool
 }
 
 // Boundary is an AS handoff on a path: the last responding hop in one AS (Near)

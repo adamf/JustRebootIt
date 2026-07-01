@@ -249,12 +249,17 @@ AS is the ISP's problem — and now you have the per-hop, per-timestamp,
 AS-attributed evidence to escalate it. The AI diagnosis is taught this fingerprint
 too, so it stops blaming your LAN for a backbone hop.
 
-With **`trace_geo`** on (default), each hop is also geolocated (via the free
-ip-api.com service) and the bottom **"Path map"** panel plots the traced paths on
-a map — each hop a dot **coloured by loss**, connected from your gateway to the
-destination — so a lossy backbone hop literally lights up red where it sits on
-the map. Geolocation is approximate (backbone routers especially); it's a
-"where is the loss" picture, not survey-grade.
+### Interconnect congestion — seeing into the middle mile
+
+Middle-mile congestion lives at the **peering/transit borders** where one network
+hands off to the next, and a single-endpoint test can't see it. With
+**`border`** probing on (default), after each trace the prober pings the **near
+side** (last hop in one AS) and the **far side** (first hop in the next) of every
+AS-handoff boundary on the path. Plotted over time in the **"Interconnect
+congestion"** panels, a far-minus-near delay that **inflates at peak hours** —
+often with far-side loss — is a congested interconnect: the evidence you take to
+your ISP. This is a lightweight take on CAIDA's Time-Series Latency Probing
+(TSLP). It needs `trace_asn` on (that's what finds the boundaries).
 
 ### Triggered diagnostics — deeper tests during a spike
 
@@ -574,8 +579,10 @@ Prober (`:9430/metrics`):
 | `probe_packets_sent_total` / `probe_packets_received_total` | counters |
 | `traceroute_hop_rtt_seconds{target,group,ttl}` | RTT to the router at each hop |
 | `traceroute_hop_info{target,ttl,addr}` | the router address seen at each hop |
-| `traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name,lat,lon}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`); labels carry each hop's address, origin AS, and approximate lat/lon (for the path map) |
+| `traceroute_hop_loss_ratio{target,group,ttl,addr,asn,as_name}` | per-hop packet loss over a multi-pass trace (`trace_probes > 1`); labels carry each hop's address and origin AS |
 | `traceroute_as_handoff{target,ttl,from_asn,to_asn}` | 1 at a TTL (hop) where the path crosses an AS boundary |
+| `traceroute_border_rtt_seconds{target,from_asn,to_asn,side,addr}` | RTT to the near/far side of an AS-handoff boundary (TSLP interconnect probe); far minus near, rising at peak, = congested interconnect |
+| `traceroute_border_loss_ratio{target,from_asn,to_asn,side,addr}` | packet loss to each side of an AS-handoff boundary |
 | `traceroute_path_length` / `traceroute_reached` | path length / reached dest |
 | `discovery_selected{target}` | 1 if the candidate is currently promoted to active probing |
 | `discovery_reach_hops{target}` / `discovery_reached{target}` | candidate distance / reachability |
